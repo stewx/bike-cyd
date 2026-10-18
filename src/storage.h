@@ -17,4 +17,9 @@ bool begin();
 void loop();
 Status status();
 
+// Serial file access (tools/sdfile.py): lists a directory as "F <size> <path>"
+// lines, or sends a file as "FILE <path> <size>", base64 lines, "EOF".
+void listDir(Print& out, const char* path);
+void sendFile(Print& out, const char* path);
+
 }  // namespace storage

@@ -2,14 +2,21 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
+#include "bike.h"
 #include "board.h"
 #include "net.h"
+#include "ride.h"
 #include "storage.h"
 #include "ui.h"
 
 static void logStatus() {
   net::Status ns = net::status();
   storage::Status ss = storage::status();
+  bike::Data bd = bike::get();
+  ride::Stats rs = ride::stats();
+  Serial.printf("bike: link=%s workout=%d speed=%.2f cad=%u watts=%u res=%u dist=%lu | ride active=%d paused=%d t=%lu\n",
+                bike::linkText(bd.link), (int)bd.workout, bd.speedKmh, bd.cadenceRpm, bd.watts, bd.resistance,
+                (unsigned long)bd.distanceM, rs.active, rs.paused, (unsigned long)rs.movingSeconds);
   char clock[32] = "no";
   if (net::timeSynced()) {
     time_t now = time(nullptr);
@@ -35,6 +42,7 @@ void setup() {
   ui::begin();
   storage::begin();
   net::begin();
+  bike::start();
 }
 
 void loop() {
@@ -44,9 +52,33 @@ void loop() {
   net::loop();
   storage::loop();
 
+  // Serial commands: 'S' dumps the screen (tools/screenshot.py);
+  // ":ls <dir>" and ":get <file>" read the SD card (tools/sdfile.py)
+  static String cmd;
+  static bool inCmd = false;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (inCmd) {
+      if (c == '\n') {
+        cmd.trim();
+        if (cmd.startsWith("ls ")) storage::listDir(Serial, cmd.substring(3).c_str());
+        else if (cmd.startsWith("get ")) storage::sendFile(Serial, cmd.substring(4).c_str());
+        inCmd = false;
+      } else if (cmd.length() < 120) {
+        cmd += c;
+      }
+    } else if (c == ':') {
+      inCmd = true;
+      cmd = "";
+    } else if (c == 'S') {
+      ui::screenshot(Serial);
+    }
+  }
+
   uint32_t now = millis();
   if (now - lastDraw >= 1000) {
     lastDraw = now;
+    ride::tick(bike::get());
     ui::draw();
   }
   if (now - lastLog >= 10000) {
