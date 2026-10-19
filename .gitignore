@@ -4,3 +4,6 @@ wifi.txt
 .pio/
 .vscode/
 nas.txt
+sdkconfig.*
+managed_components/
+.dummy/

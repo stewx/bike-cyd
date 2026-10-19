@@ -6,8 +6,8 @@
 #include "bike.h"
 #include "display.h"
 #include "fonts/fonts_data.h"
+#include "nas.h"
 #include "net.h"
-#include "onedrive.h"
 #include "ride.h"
 #include "storage.h"
 
@@ -83,7 +83,7 @@ static void drawBarFrame() {
 }
 
 static void drawBar(const net::Status& ns, const storage::Status& ss, const bike::Data& bd,
-                    const onedrive::Status& os) {
+                    const nas::Status& us) {
   char buf[32];
   const int mid = BAR_H / 2;
 
@@ -105,17 +105,16 @@ static void drawBar(const net::Status& ns, const storage::Status& ss, const bike
 
   const char* cloud = icon::CLOUD_OFF;
   uint16_t cloudColor = C_DIM;
-  switch (os.state) {
-    case onedrive::State::Idle:
-      cloud = os.failed ? icon::CLOUD_ALERT : icon::CLOUD_OK;
-      cloudColor = os.failed ? C_AMBER : C_GREEN;
+  switch (us.state) {
+    case nas::State::Idle:
+      cloud = us.failed ? icon::CLOUD_ALERT : icon::CLOUD_OK;
+      cloudColor = us.failed ? C_AMBER : C_GREEN;
       break;
-    case onedrive::State::Uploading: cloud = icon::CLOUD_UP; cloudColor = C_BLUE; break;
-    case onedrive::State::Waiting: cloud = icon::CLOUD_ALERT; cloudColor = C_AMBER; break;
-    case onedrive::State::SigningIn: cloudColor = C_AMBER; break;
+    case nas::State::Uploading: cloud = icon::CLOUD_UP; cloudColor = C_BLUE; break;
+    case nas::State::Waiting: cloud = icon::CLOUD_ALERT; cloudColor = C_AMBER; break;
     default: break;
   }
-  if (os.pending && os.state != onedrive::State::Uploading && os.state != onedrive::State::Waiting) {
+  if (us.pending && us.state != nas::State::Uploading && us.state != nas::State::Waiting) {
     cloud = icon::CLOUD_UP;
   }
   text(cloud, 214, mid, textdatum_t::middle_left, fIcon14, cloudColor, C_CARD, 16);
@@ -210,7 +209,7 @@ static void row(int i, const char* label, const char* value, uint16_t color) {
 }
 
 static void drawIdle(const net::Status& ns, const storage::Status& ss, const bike::Data& bd,
-                     const onedrive::Status& os) {
+                     const nas::Status& us) {
   char buf[64];
   if (!ns.configured) row(0, "WiFi", "no settings stored", C_BAD);
   else if (ns.connected) row(0, "WiFi", ns.ssid.c_str(), C_GREEN);
@@ -256,22 +255,17 @@ static void drawIdle(const net::Status& ns, const storage::Status& ss, const bik
     row(6, "Bike", buf, C_AMBER);
   }
 
-  if (os.state == onedrive::State::SigningIn && os.userCode[0]) {
-    snprintf(buf, sizeof buf, "sign in at %s", os.verifyUrl);
-    row(7, "OneDrive", buf, C_AMBER);
-    snprintf(buf, sizeof buf, "code  %s", os.userCode);
-    row(8, "", buf, C_TEXT);
-    return;
-  }
-  if (os.pending) {
-    snprintf(buf, sizeof buf, "%s, %d to upload", onedrive::stateText(os.state), os.pending);
-  } else if (os.failed) {
-    snprintf(buf, sizeof buf, "%s, %d failed", onedrive::stateText(os.state), os.failed);
+  if (us.state == nas::State::Waiting && us.lastError[0]) {
+    snprintf(buf, sizeof buf, "%s", us.lastError);
+  } else if (us.pending) {
+    snprintf(buf, sizeof buf, "%s, %d to upload", nas::stateText(us.state), us.pending);
+  } else if (us.failed) {
+    snprintf(buf, sizeof buf, "%s, %d failed", nas::stateText(us.state), us.failed);
   } else {
-    snprintf(buf, sizeof buf, "%s", onedrive::stateText(os.state));
+    snprintf(buf, sizeof buf, "%s", nas::stateText(us.state));
   }
-  bool ok = os.state == onedrive::State::Idle && !os.failed;
-  row(7, "OneDrive", buf, ok ? C_GREEN : os.state == onedrive::State::Uploading ? C_BLUE : C_AMBER);
+  bool ok = us.state == nas::State::Idle && !us.failed;
+  row(7, "NAS", buf, ok ? C_GREEN : us.state == nas::State::Uploading ? C_BLUE : C_AMBER);
   row(8, "Firmware", FW_VERSION, C_DIM);
 }
 
@@ -328,11 +322,11 @@ struct Snapshot {
   storage::Status ss;
   bike::Data bd;
   ride::Stats rs;
-  onedrive::Status os;
+  nas::Status us;
 };
 
 static Snapshot snapshot() {
-  Snapshot s = {net::status(), storage::status(), bike::get(), ride::stats(), onedrive::status()};
+  Snapshot s = {net::status(), storage::status(), bike::get(), ride::stats(), nas::status()};
 #ifdef UI_DEMO
   // Sample ride from the design mockups; pauses for 5 s every 10 s
   s.bd.link = bike::Link::Connected;
@@ -346,13 +340,13 @@ static Snapshot snapshot() {
 }
 
 static void render(const Snapshot& s) {
-  drawBar(s.ns, s.ss, s.bd, s.os);
+  drawBar(s.ns, s.ss, s.bd, s.us);
   if (s.rs.active) {
     showScreen(Screen::Ride);
     drawRide(s.bd, s.rs);
   } else {
     showScreen(Screen::Idle);
-    drawIdle(s.ns, s.ss, s.bd, s.os);
+    drawIdle(s.ns, s.ss, s.bd, s.us);
   }
 }
 

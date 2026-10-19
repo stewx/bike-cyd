@@ -1,0 +1,28 @@
+{
+  "name": "libsmb2",
+  "version": "6.0.0+c796ab3",
+  "description": "SMB2/3 client library, vendored from github.com/sahlberg/libsmb2 at c796ab389328 (LGPL-2.1). Build settings mirror its ESP-IDF component.",
+  "license": "LGPL-2.1-or-later",
+  "frameworks": "*",
+  "platforms": "espressif32",
+  "build": {
+    "srcDir": "lib",
+    "includeDir": "include",
+    "srcFilter": ["+<*.c>", "-<aes_apple.c>", "-<krb5-wrapper.c>"],
+    "flags": [
+      "-D_U_=__attribute__((unused))",
+      "-Ilib",
+      "-Iinclude/smb2",
+      "-Iinclude/esp",
+      "-DHAVE_CONFIG_H",
+      "-DNEED_READV",
+      "-DNEED_WRITEV",
+      "-DNEED_GETLOGIN_R",
+      "-DNEED_RANDOM",
+      "-DNEED_SRANDOM",
+      "-Wno-error",
+      "-Wno-unused-variable",
+      "-Wno-unused-function"
+    ]
+  }
+}
