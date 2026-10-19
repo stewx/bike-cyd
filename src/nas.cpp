@@ -3,8 +3,10 @@
 #include <Preferences.h>
 #include <SD.h>
 #include <WiFi.h>
+#include <esp_task_wdt.h>
 #include <fcntl.h>
 
+#include "logger.h"
 #include "ride.h"
 #include "storage.h"
 #include "tcx.h"
@@ -49,7 +51,7 @@ static void setError(const char* fmt, ...) {
   va_start(args, fmt);
   vsnprintf(buf, sizeof buf, fmt, args);
   va_end(args);
-  Serial.printf("nas: %s\n", buf);
+  logger::printf("nas: %s\n", buf);
   portENTER_CRITICAL(&lock);
   strlcpy(current.lastError, buf, sizeof current.lastError);
   portEXIT_CRITICAL(&lock);
@@ -148,6 +150,7 @@ static Result upload(const Settings& cfg, const String& name) {
     static uint8_t buf[CHUNK];
     bool ok = true;
     for (;;) {
+      esp_task_wdt_reset();
       int n = f.read(buf, sizeof buf);
       if (n <= 0) break;
       for (int off = 0; off < n;) {
@@ -167,7 +170,7 @@ static Result upload(const Settings& cfg, const String& name) {
       if (smb2_rename(smb2, partPath.c_str(), finalPath.c_str()) < 0) {
         setError("rename: %s", smb2_get_error(smb2));
       } else {
-        Serial.printf("nas: uploaded %s (%u bytes, %lu ms)\n", name.c_str(), (unsigned)f.size(),
+        logger::printf("nas: uploaded %s (%u bytes, %lu ms)\n", name.c_str(), (unsigned)f.size(),
                       (unsigned long)(millis() - t0));
         result = Result::Done;
       }
@@ -181,28 +184,38 @@ static Result upload(const Settings& cfg, const String& name) {
   return result;
 }
 
+// Sleeps in short steps so the task watchdog keeps getting fed
+static void waitMs(uint32_t ms) {
+  for (uint32_t start = millis(); millis() - start < ms;) {
+    esp_task_wdt_reset();
+    delay(min(ms - (millis() - start), (uint32_t)1000));
+  }
+}
+
 static void waitAfterError() {
   setState(State::Waiting);
-  delay(retryDelayMs);
+  waitMs(retryDelayMs);
   retryDelayMs = min(retryDelayMs * 2, RETRY_MAX_MS);
 }
 
 // ------------------------------------------------------------------ task
 
 static void run(void*) {
+  esp_task_wdt_add(nullptr);  // a hang (e.g. a stuck SMB call) restarts the board
   for (;;) {
+    esp_task_wdt_reset();
     // Finished rides become TCX files in /rides/pending, even while the NAS is unreachable
     if (storage::status().mounted) tcx::exportFinished();
 
     Settings cfg = loadSettings();
     if (!cfg.valid()) {
       setState(State::NotConfigured);
-      delay(IDLE_CHECK_MS);
+      waitMs(IDLE_CHECK_MS);
       continue;
     }
     if (WiFi.status() != WL_CONNECTED || !storage::status().mounted) {
       setState(State::Offline);
-      delay(IDLE_CHECK_MS);
+      waitMs(IDLE_CHECK_MS);
       continue;
     }
 
@@ -211,7 +224,7 @@ static void run(void*) {
     // Leave the radio and memory to the bike while someone is riding
     if (oldest.isEmpty() || ride::stats().active) {
       setState(State::Idle);
-      delay(IDLE_CHECK_MS);
+      waitMs(IDLE_CHECK_MS);
       continue;
     }
 
@@ -235,7 +248,8 @@ static void run(void*) {
   }
 }
 
-void start() { xTaskCreatePinnedToCore(run, "nas", 12288, nullptr, 1, nullptr, 1); }
+// Measured peak stack use is ~3.1 KB (TCX export, SMB upload)
+void start() { xTaskCreatePinnedToCore(run, "nas", 6144, nullptr, 1, nullptr, 1); }
 
 Status status() {
   portENTER_CRITICAL(&lock);

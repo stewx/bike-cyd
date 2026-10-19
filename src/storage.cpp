@@ -4,6 +4,7 @@
 #include <SPI.h>
 
 #include "board.h"
+#include "logger.h"
 
 namespace storage {
 
@@ -28,7 +29,7 @@ bool begin() {
   if (!SD.begin(PIN_SD_CS, sdSpi, 20000000) || SD.cardType() == CARD_NONE) {
     SD.end();
     current = {false, "none", 0, 0};
-    Serial.println("storage: no SD card");
+    logger::printf("storage: no SD card\n");
     return false;
   }
   for (const char* dir : {"/rides", "/rides/recording", "/rides/finished", "/rides/csv", "/rides/discarded",
@@ -40,7 +41,7 @@ bool begin() {
   current.type = typeName(SD.cardType());
   current.totalBytes = SD.totalBytes();
   current.freeBytes = current.totalBytes - SD.usedBytes();
-  Serial.printf("storage: %s card, %.1f GB free of %.1f GB\n", current.type, current.freeBytes / 1e9,
+  logger::printf("storage: %s card, %.1f GB free of %.1f GB\n", current.type, current.freeBytes / 1e9,
                 current.totalBytes / 1e9);
   return true;
 }

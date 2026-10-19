@@ -3,6 +3,7 @@
 #include <SD.h>
 #include <time.h>
 
+#include "logger.h"
 #include "net.h"
 #include "storage.h"
 
@@ -31,7 +32,7 @@ static String fileName;
 static void moveFile(const char* toDir) {
   String from = String(RECORDING_DIR) + "/" + fileName;
   String to = String(toDir) + "/" + fileName;
-  if (!SD.rename(from, to)) Serial.printf("ride: could not move %s\n", from.c_str());
+  if (!SD.rename(from, to)) logger::printf("ride: could not move %s\n", from.c_str());
 }
 
 void begin() {
@@ -42,7 +43,7 @@ void begin() {
     if (f.isDirectory()) continue;
     String name = f.name();
     f.close();
-    Serial.printf("ride: recovering interrupted ride %s\n", name.c_str());
+    logger::printf("ride: recovering interrupted ride %s\n", name.c_str());
     SD.rename(String(RECORDING_DIR) + "/" + name, String(FINISHED_DIR) + "/" + name);
   }
 }
@@ -65,7 +66,7 @@ static void startRide(const bike::Data& d) {
   startEpoch = 0;
 
   if (!storage::status().mounted) {
-    Serial.println("ride: no SD card, not recording");
+    logger::printf("ride: no SD card, not recording\n");
     return;
   }
   char name[40];
@@ -80,17 +81,17 @@ static void startRide(const bike::Data& d) {
   fileName = name;
   file = SD.open(String(RECORDING_DIR) + "/" + fileName, FILE_WRITE);
   if (!file) {
-    Serial.printf("ride: could not create %s\n", name);
+    logger::printf("ride: could not create %s\n", name);
     return;
   }
   file.print("# bike-cyd ride v1\n# columns: t,speed_kmh,cadence_rpm,watts,distance_m,resistance\n");
   noteStartTime();
   current.recording = true;
-  Serial.printf("ride: started, recording %s\n", name);
+  logger::printf("ride: started, recording %s\n", name);
 }
 
 static void endRide() {
-  Serial.printf("ride: ended after %lu s moving, %lu m\n", (unsigned long)current.movingSeconds,
+  logger::printf("ride: ended after %lu s moving, %lu m\n", (unsigned long)current.movingSeconds,
                 (unsigned long)current.distanceM);
   if (file) {
     noteStartTime();

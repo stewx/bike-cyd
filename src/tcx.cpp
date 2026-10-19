@@ -1,9 +1,12 @@
 #include "tcx.h"
 
 #include <SD.h>
+#include <esp_task_wdt.h>
 #include <time.h>
 
 #include <vector>
+
+#include "logger.h"
 
 namespace tcx {
 
@@ -121,6 +124,7 @@ static void writeTcx(File& in, File& out, const Summary& sum) {
   in.seek(0);
   Sample s;
   while (in.available()) {
+    esp_task_wdt_reset();  // long rides take a while to write
     String line = in.readStringUntil('\n');
     if (line.startsWith("#") || !parseRow(line, s)) continue;
     isoTime(ts, sizeof ts, sum.startEpoch + lroundf(s.t));
@@ -173,19 +177,19 @@ static bool exportOne(const String& csvName) {
   Summary sum;
   if (!summarize(in, sum)) {
     in.close();
-    Serial.printf("tcx: %s has no samples\n", csvName.c_str());
+    logger::printf("tcx: %s has no samples\n", csvName.c_str());
     moveCsv(csvName, DISCARDED_DIR);
     return false;
   }
   if (sum.movingS < MIN_MOVING_S || sum.distanceM < MIN_DISTANCE_M) {
     in.close();
-    Serial.printf("tcx: %s too short (%.0f s, %lu m), discarded\n", csvName.c_str(), sum.movingS, sum.distanceM);
+    logger::printf("tcx: %s too short (%.0f s, %lu m), discarded\n", csvName.c_str(), sum.movingS, sum.distanceM);
     moveCsv(csvName, DISCARDED_DIR);
     return false;
   }
   if (!sum.startEpoch) {
     in.close();
-    Serial.printf("tcx: %s has no start time\n", csvName.c_str());
+    logger::printf("tcx: %s has no start time\n", csvName.c_str());
     moveCsv(csvName, FAILED_DIR);
     return false;
   }
@@ -196,7 +200,7 @@ static bool exportOne(const String& csvName) {
   File out = SD.open(tmpPath, FILE_WRITE);
   if (!out) {
     in.close();
-    Serial.printf("tcx: could not create %s\n", tmpPath.c_str());
+    logger::printf("tcx: could not create %s\n", tmpPath.c_str());
     return false;
   }
   writeTcx(in, out, sum);
@@ -204,12 +208,12 @@ static bool exportOne(const String& csvName) {
   out.close();
 
   if (!SD.rename(tmpPath, String(PENDING_DIR) + "/" + name)) {
-    Serial.printf("tcx: could not queue %s\n", name.c_str());
+    logger::printf("tcx: could not queue %s\n", name.c_str());
     SD.remove(tmpPath);
     return false;
   }
   moveCsv(csvName, CSV_DIR);
-  Serial.printf("tcx: %s -> %s (%.0f s, %lu m, %d points)\n", csvName.c_str(), name.c_str(), sum.movingS,
+  logger::printf("tcx: %s -> %s (%.0f s, %lu m, %d points)\n", csvName.c_str(), name.c_str(), sum.movingS,
                 sum.distanceM, sum.rows);
   return true;
 }

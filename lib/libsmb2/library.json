@@ -11,6 +11,7 @@
     "srcFilter": ["+<*.c>", "-<aes_apple.c>", "-<krb5-wrapper.c>"],
     "flags": [
       "-D_U_=__attribute__((unused))",
+      "-DSMB2_MAX_VECTORS=32",
       "-Ilib",
       "-Iinclude/smb2",
       "-Iinclude/esp",

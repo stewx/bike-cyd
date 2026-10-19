@@ -50,7 +50,7 @@ def icons(*names):
 # name, ttf file, pixel size, characters
 SPECS = [
     ("font_speed", "BarlowSemiCondensed-SemiBold.ttf", 112, DIGITS),
-    ("font_big", "BarlowSemiCondensed-SemiBold.ttf", 36, DIGITS + ":"),
+    ("font_big", "BarlowSemiCondensed-SemiBold.ttf", 36, DIGITS + ":%"),
     ("font_mid", "BarlowSemiCondensed-SemiBold.ttf", 17, DIGITS + ": W"),
     ("font_paused", "BarlowSemiCondensed-Bold.ttf", 44, " ADEPSU"),
     ("font_label12", "Barlow-Medium.ttf", 12, ASCII),

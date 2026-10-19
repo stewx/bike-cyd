@@ -60,6 +60,7 @@ static constexpr int VALUE_X = 92;
 
 enum class Screen { None, Idle, Ride };
 static Screen shown = Screen::None;
+static uint32_t lastActivity = 0;  // for the backlight timeout
 static bool shownPaused = false;
 
 static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_DIM, C_GREEN, C_BLUE, C_VIOLET, C_CYAN, C_TEAL, C_AMBER, C_PINK,
@@ -288,6 +289,7 @@ void begin() {
   lcd.init();
   lcd.setRotation(1);  // landscape, 320x240
   lcd.setBrightness(255);
+  lastActivity = millis();
 
   fSpeed.load(font_speed, sizeof font_speed);
   fBig.load(font_big, sizeof font_big);
@@ -353,7 +355,57 @@ static void render(const Snapshot& s) {
   }
 }
 
-void draw() { render(snapshot()); }
+// ---------------------------------------------------------------- backlight
+
+static constexpr uint32_t FULL_MS = 2 * 60 * 1000;
+static constexpr uint32_t DIM_MS = 30 * 60 * 1000;
+static constexpr uint8_t FULL = 255;
+static constexpr uint8_t DIMMED = 40;
+static int brightness = -1;
+
+void wake() { lastActivity = millis(); }
+
+static void updateBacklight(const Snapshot& s) {
+  static bool wasLinked = false;
+  bool linked = s.bd.link == bike::Link::Connected;
+  // Riding, or the console waking up (it connects when someone gets on)
+  if (s.rs.active || (linked && !wasLinked)) wake();
+  wasLinked = linked;
+
+  uint32_t idle = millis() - lastActivity;
+  int level = idle < FULL_MS ? FULL : idle < DIM_MS ? DIMMED : 0;
+  if (level != brightness) {
+    lcd.setBrightness(level);
+    brightness = level;
+  }
+}
+
+void draw() {
+  Snapshot s = snapshot();
+  updateBacklight(s);
+  render(s);
+}
+
+void otaProgress(int percent) {
+  static int shownPercent = -2;
+  if (percent < 0) {
+    // Update failed: redraw the normal screen
+    shown = Screen::None;
+    shownPercent = -2;
+    return;
+  }
+  if (percent == shownPercent) return;
+  if (shownPercent == -2) {
+    lcd.setBrightness(FULL);
+    brightness = FULL;
+    fillRect(0, BAR_H, W, H - BAR_H, C_BG);
+    text("Updating firmware", W / 2, 110, textdatum_t::middle_center, fLabel15, C_TEXT, C_BG);
+  }
+  shownPercent = percent;
+  char buf[8];
+  snprintf(buf, sizeof buf, "%d%%", percent);
+  text(buf, W / 2, 150, textdatum_t::middle_center, fBig, C_BLUE, C_BG, 120);
+}
 
 void screenshot(Print& out) {
   // The panel's read-back returns corrupted pixels on this board, so the

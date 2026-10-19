@@ -2,7 +2,12 @@
 
 #include <NimBLEDevice.h>
 #include <SD.h>
+#include <esp_task_wdt.h>
 
+#include <algorithm>
+#include <vector>
+
+#include "logger.h"
 #include "storage.h"
 
 // iFit / ProForm protocol client for the HealthRider H25X ("I_EB").
@@ -27,8 +32,9 @@ static constexpr uint32_t IDLE_RELEASE_MS = 3 * 60 * 1000;
 // if it is still awake after REST_MAX_MS someone is probably using it.
 static constexpr uint32_t ASLEEP_MS = 60 * 1000;
 static constexpr uint32_t REST_MAX_MS = 7 * 60 * 1000;
-// Raw frame log on the SD card, for decoding work
+// Raw frame log on the SD card, for decoding work; one file per connection
 static constexpr bool LOG_FRAMES = true;
+static constexpr size_t MAX_FRAME_LOGS = 20;
 
 static const uint8_t INIT1[] = {0xfe, 0x02, 0x08, 0x02};
 static const uint8_t INIT2[] = {0xff, 0x08, 0x02, 0x04, 0x02, 0x04, 0x02, 0x04, 0x81, 0x87,
@@ -147,7 +153,7 @@ static void onNotify(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, bool) 
   portEXIT_CRITICAL(&lock);
   if (unknownState != loggedState && unknownState) {
     loggedState = unknownState;
-    Serial.printf("bike: unknown workout state 0x%02x\n", unknownState);
+    logger::printf("bike: unknown workout state 0x%02x\n", unknownState);
   }
 }
 
@@ -157,6 +163,7 @@ static bool write(NimBLERemoteCharacteristic* ch, const Frame& f) {
 }
 
 static const NimBLEAdvertisedDevice* scan() {
+  esp_task_wdt_reset();
   NimBLEScan* scanner = NimBLEDevice::getScan();
   scanner->setActiveScan(true);
   scanner->setInterval(100);
@@ -169,9 +176,27 @@ static const NimBLEAdvertisedDevice* scan() {
   return nullptr;
 }
 
+// Deletes the oldest frame logs so at most MAX_FRAME_LOGS - 1 remain
+static void pruneLogs() {
+  File dir = SD.open("/probe");
+  if (!dir) return;
+  std::vector<String> names;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    if (!f.isDirectory()) names.push_back(f.name());
+  }
+  dir.close();
+  if (names.size() < MAX_FRAME_LOGS) return;
+  // Names hold the start time, but "frames-7.log" (no clock yet) sorts by length first
+  std::sort(names.begin(), names.end(), [](const String& a, const String& b) {
+    return a.length() != b.length() ? a.length() < b.length() : a < b;
+  });
+  for (size_t i = 0; i + MAX_FRAME_LOGS - 1 < names.size(); i++) SD.remove("/probe/" + names[i]);
+}
+
 static void openLog() {
   if (!LOG_FRAMES || !storage::status().mounted) return;
   if (!SD.exists("/probe")) SD.mkdir("/probe");
+  pruneLogs();
   char path[48];
   snprintf(path, sizeof path, "/probe/frames-%lu.log", (unsigned long)time(nullptr));
   logFile = SD.open(path, FILE_WRITE);
@@ -183,7 +208,7 @@ static bool session(NimBLEClient* client) {
   NimBLERemoteCharacteristic* wr = svc ? svc->getCharacteristic(IFIT_WRITE) : nullptr;
   NimBLERemoteCharacteristic* nt = svc ? svc->getCharacteristic(IFIT_NOTIFY) : nullptr;
   if (!wr || !nt || !nt->subscribe(true, onNotify)) {
-    Serial.println("bike: iFit service not usable");
+    logger::printf("bike: iFit service not usable\n");
     return false;
   }
 
@@ -191,16 +216,18 @@ static bool session(NimBLEClient* client) {
   setLink(Link::Initializing);
   for (const Frame& f : INIT_SEQUENCE) {
     if (!client->isConnected()) return false;
+    esp_task_wdt_reset();
     write(wr, f);
     delay(INIT_GAP_MS);
   }
 
   setLink(Link::Connected);
-  Serial.println("bike: connected and polling");
+  logger::printf("bike: connected and polling\n");
   size_t step = 0;
   uint32_t lastFlush = millis();
   uint32_t lastRiding = millis();
   while (client->isConnected()) {
+    esp_task_wdt_reset();
     write(wr, POLL_SEQUENCE[step]);
     step = (step + 1) % (sizeof POLL_SEQUENCE / sizeof POLL_SEQUENCE[0]);
     if (logFile && millis() - lastFlush > 5000) {
@@ -210,7 +237,7 @@ static bool session(NimBLEClient* client) {
     if (get().workout == Workout::Running) {
       lastRiding = millis();
     } else if (millis() - lastRiding > IDLE_RELEASE_MS) {
-      Serial.println("bike: idle for 3 minutes, disconnecting so the console can sleep");
+      logger::printf("bike: idle for 3 minutes, disconnecting so the console can sleep\n");
       return true;
     }
     delay(POLL_MS);
@@ -219,6 +246,7 @@ static bool session(NimBLEClient* client) {
 }
 
 static bool seen(const NimBLEAddress& addr) {
+  esp_task_wdt_reset();
   NimBLEScan* scanner = NimBLEDevice::getScan();
   scanner->setActiveScan(false);  // listen only; don't poke the console
   NimBLEScanResults results = scanner->getResults(SCAN_MS, false);
@@ -238,14 +266,15 @@ static void rest(const NimBLEAddress& addr) {
     if (seen(addr)) {
       lastSeen = millis();
     } else if (millis() - lastSeen > ASLEEP_MS) {
-      Serial.printf("bike: console asleep after %lu s\n", (unsigned long)((lastSeen - start) / 1000));
+      logger::printf("bike: console asleep after %lu s\n", (unsigned long)((lastSeen - start) / 1000));
       return;
     }
   }
-  Serial.println("bike: console still awake after 7 minutes, reconnecting");
+  logger::printf("bike: console still awake after 7 minutes, reconnecting\n");
 }
 
 static void run(void*) {
+  esp_task_wdt_add(nullptr);  // a hang anywhere in here restarts the board
   NimBLEDevice::init("bike-cyd");
   for (;;) {
     setLink(Link::Scanning);
@@ -258,16 +287,17 @@ static void run(void*) {
     setLink(Link::Connecting);
     const NimBLEAddress addr = found->getAddress();
     NimBLEClient* client = NimBLEDevice::createClient();
+    client->setConnectTimeout(10000);  // well inside the 60 s watchdog
     bool released = false;
     if (client->connect(found)) {
       released = session(client);
       client->disconnect();
     } else {
-      Serial.println("bike: connect failed");
+      logger::printf("bike: connect failed\n");
     }
     NimBLEDevice::deleteClient(client);
     if (logFile) logFile.close();
-    Serial.println("bike: disconnected");
+    logger::printf("bike: disconnected\n");
     if (released) rest(addr);
     else delay(2000);
   }
@@ -281,7 +311,7 @@ static uint32_t simLengthMs = 0;
 void simulate(uint32_t seconds) {
   simStartMs = millis();
   simLengthMs = seconds * 1000;
-  Serial.printf("bike: simulating a %lu s ride\n", (unsigned long)seconds);
+  logger::printf("bike: simulating a %lu s ride\n", (unsigned long)seconds);
 }
 
 // Made-up data in the shape the console sends: a message every 2.3 s,
@@ -291,7 +321,7 @@ static bool simulated(Data& d) {
   const uint32_t elapsed = millis() - simStartMs;
   if (elapsed > simLengthMs + 15000) {
     simLengthMs = 0;
-    Serial.println("bike: simulation over");
+    logger::printf("bike: simulation over\n");
     return false;
   }
   const uint32_t t = elapsed / 2300 * 2300;  // time of the latest message

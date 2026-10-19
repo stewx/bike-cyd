@@ -56,7 +56,11 @@ extern "C" {
 #define SMB2_SIGNATURE_SIZE 16
 #define SMB2_KEY_SIZE 16
 
+/* bike-cyd: overridable; every PDU carries two arrays of this many iovecs,
+ * which at 256 costs ~6 KB of heap per request on the ESP32 */
+#ifndef SMB2_MAX_VECTORS
 #define SMB2_MAX_VECTORS 256
+#endif
 
 struct smb2_io_vectors {
         size_t num_done;

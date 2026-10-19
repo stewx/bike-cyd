@@ -4,9 +4,13 @@
 #include <WiFi.h>
 #include <time.h>
 
+#include "logger.h"
+
 namespace net {
 
 static constexpr uint32_t RETRY_MS = 30000;
+// Halifax, NS: Atlantic time with DST. time() stays UTC for ride files.
+static constexpr const char* TIME_ZONE = "AST4ADT,M3.2.0,M11.1.0";
 
 static String ssid;
 static String pass;
@@ -25,20 +29,24 @@ void begin() {
     prefs.end();
   }
   if (ssid.isEmpty()) {
-    Serial.println("net: no WiFi settings in NVS");
+    logger::printf("net: no WiFi settings in NVS\n");
     return;
   }
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   connect();
-  // Local time is Halifax, NS (Atlantic, with DST). time() stays UTC for ride files.
-  configTzTime("AST4ADT,M3.2.0,M11.1.0", "pool.ntp.org", "time.google.com");
+  configTzTime(TIME_ZONE, "pool.ntp.org", "time.google.com");
+}
+
+void setTimeZone() {
+  setenv("TZ", TIME_ZONE, 1);
+  tzset();
 }
 
 void loop() {
   if (ssid.isEmpty() || WiFi.status() == WL_CONNECTED) return;
   if (millis() - lastAttempt > RETRY_MS) {
-    Serial.println("net: reconnecting");
+    logger::printf("net: reconnecting\n");
     WiFi.disconnect();
     connect();
   }

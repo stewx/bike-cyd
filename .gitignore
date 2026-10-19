@@ -8,3 +8,4 @@ sdkconfig.*
 managed_components/
 .dummy/
 strava.txt
+ota.txt
