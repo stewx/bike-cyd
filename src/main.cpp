@@ -5,6 +5,7 @@
 #include "bike.h"
 #include "board.h"
 #include "net.h"
+#include "onedrive.h"
 #include "ride.h"
 #include "storage.h"
 #include "ui.h"
@@ -43,6 +44,7 @@ void setup() {
   storage::begin();
   net::begin();
   bike::start();
+  onedrive::start();
 }
 
 void loop() {
@@ -53,7 +55,8 @@ void loop() {
   storage::loop();
 
   // Serial commands: 'S' dumps the screen (tools/screenshot.py);
-  // ":ls <dir>" and ":get <file>" read the SD card (tools/sdfile.py)
+  // ":ls <dir>" and ":get <file>" read the SD card (tools/sdfile.py);
+  // ":od ..." controls the OneDrive uploader
   static String cmd;
   static bool inCmd = false;
   while (Serial.available()) {
@@ -63,6 +66,7 @@ void loop() {
         cmd.trim();
         if (cmd.startsWith("ls ")) storage::listDir(Serial, cmd.substring(3).c_str());
         else if (cmd.startsWith("get ")) storage::sendFile(Serial, cmd.substring(4).c_str());
+        else if (cmd == "od" || cmd.startsWith("od ")) onedrive::command(Serial, cmd.substring(3));
         inCmd = false;
       } else if (cmd.length() < 120) {
         cmd += c;

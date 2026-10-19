@@ -36,6 +36,10 @@ ICON_NAMES = {
     "RESISTANCE": "sliders-horizontal",
     "AVERAGE": "trending-up",
     "PAUSE": "pause",
+    "CLOUD_OK": "cloud-check",
+    "CLOUD_UP": "cloud-upload",
+    "CLOUD_ALERT": "cloud-alert",
+    "CLOUD_OFF": "cloud-off",
 }
 
 
@@ -53,7 +57,8 @@ SPECS = [
     ("font_label13", "Barlow-Medium.ttf", 13, ASCII),
     ("font_label15", "Barlow-Medium.ttf", 15, ASCII),
     ("icons14", "lucide.ttf", 14,
-     icons("WIFI", "WIFI_OFF", "BLUETOOTH", "BLUETOOTH_OFF", "SD", "CADENCE", "POWER", "RESISTANCE", "AVERAGE")),
+     icons("WIFI", "WIFI_OFF", "BLUETOOTH", "BLUETOOTH_OFF", "SD", "CADENCE", "POWER", "RESISTANCE", "AVERAGE",
+           "CLOUD_OK", "CLOUD_UP", "CLOUD_ALERT", "CLOUD_OFF")),
     ("icons18", "lucide.ttf", 18, icons("SPEED")),
     ("icons22", "lucide.ttf", 22, icons("DISTANCE", "TIME")),
     ("icons40", "lucide.ttf", 40, icons("PAUSE")),

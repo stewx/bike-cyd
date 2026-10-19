@@ -20,6 +20,13 @@ static const NimBLEUUID IFIT_NOTIFY("00001535-1412-efde-1523-785feabcd123");
 static constexpr uint32_t SCAN_MS = 5000;
 static constexpr uint32_t INIT_GAP_MS = 400;
 static constexpr uint32_t POLL_MS = 200;
+// Polling keeps the console awake, so let go after this long without riding
+static constexpr uint32_t IDLE_RELEASE_MS = 3 * 60 * 1000;
+// After letting go: the console counts as asleep once it stops advertising
+// for this long. It normally sleeps about 5 minutes after the disconnect, so
+// if it is still awake after REST_MAX_MS someone is probably using it.
+static constexpr uint32_t ASLEEP_MS = 60 * 1000;
+static constexpr uint32_t REST_MAX_MS = 7 * 60 * 1000;
 // Raw frame log on the SD card, for decoding work
 static constexpr bool LOG_FRAMES = true;
 
@@ -158,19 +165,20 @@ static void openLog() {
   logFile = SD.open(path, FILE_WRITE);
 }
 
-static void session(NimBLEClient* client) {
+// Returns true if it let go of the bike because nobody was riding.
+static bool session(NimBLEClient* client) {
   NimBLERemoteService* svc = client->getService(IFIT_SERVICE);
   NimBLERemoteCharacteristic* wr = svc ? svc->getCharacteristic(IFIT_WRITE) : nullptr;
   NimBLERemoteCharacteristic* nt = svc ? svc->getCharacteristic(IFIT_NOTIFY) : nullptr;
   if (!wr || !nt || !nt->subscribe(true, onNotify)) {
     Serial.println("bike: iFit service not usable");
-    return;
+    return false;
   }
 
   openLog();
   setLink(Link::Initializing);
   for (const Frame& f : INIT_SEQUENCE) {
-    if (!client->isConnected()) return;
+    if (!client->isConnected()) return false;
     write(wr, f);
     delay(INIT_GAP_MS);
   }
@@ -179,6 +187,7 @@ static void session(NimBLEClient* client) {
   Serial.println("bike: connected and polling");
   size_t step = 0;
   uint32_t lastFlush = millis();
+  uint32_t lastRiding = millis();
   while (client->isConnected()) {
     write(wr, POLL_SEQUENCE[step]);
     step = (step + 1) % (sizeof POLL_SEQUENCE / sizeof POLL_SEQUENCE[0]);
@@ -186,8 +195,42 @@ static void session(NimBLEClient* client) {
       logFile.flush();
       lastFlush = millis();
     }
+    if (get().workout == Workout::Running) {
+      lastRiding = millis();
+    } else if (millis() - lastRiding > IDLE_RELEASE_MS) {
+      Serial.println("bike: idle for 3 minutes, disconnecting so the console can sleep");
+      return true;
+    }
     delay(POLL_MS);
   }
+  return false;
+}
+
+static bool seen(const NimBLEAddress& addr) {
+  NimBLEScan* scanner = NimBLEDevice::getScan();
+  scanner->setActiveScan(false);  // listen only; don't poke the console
+  NimBLEScanResults results = scanner->getResults(SCAN_MS, false);
+  for (int i = 0; i < results.getCount(); i++) {
+    if (results.getDevice(i)->getAddress() == addr) return true;
+  }
+  return false;
+}
+
+// Stays away from the bike until it stops advertising (console asleep), so
+// that the next advertisement means someone has woken it up to ride.
+static void rest(const NimBLEAddress& addr) {
+  setLink(Link::Resting);
+  uint32_t start = millis();
+  uint32_t lastSeen = millis();
+  while (millis() - start < REST_MAX_MS) {
+    if (seen(addr)) {
+      lastSeen = millis();
+    } else if (millis() - lastSeen > ASLEEP_MS) {
+      Serial.printf("bike: console asleep after %lu s\n", (unsigned long)((lastSeen - start) / 1000));
+      return;
+    }
+  }
+  Serial.println("bike: console still awake after 7 minutes, reconnecting");
 }
 
 static void run(void*) {
@@ -201,9 +244,11 @@ static void run(void*) {
     }
 
     setLink(Link::Connecting);
+    const NimBLEAddress addr = found->getAddress();
     NimBLEClient* client = NimBLEDevice::createClient();
+    bool released = false;
     if (client->connect(found)) {
-      session(client);
+      released = session(client);
       client->disconnect();
     } else {
       Serial.println("bike: connect failed");
@@ -211,7 +256,8 @@ static void run(void*) {
     NimBLEDevice::deleteClient(client);
     if (logFile) logFile.close();
     Serial.println("bike: disconnected");
-    delay(2000);
+    if (released) rest(addr);
+    else delay(2000);
   }
 }
 
@@ -230,6 +276,7 @@ const char* linkText(Link link) {
     case Link::Connecting: return "connecting";
     case Link::Initializing: return "starting up";
     case Link::Connected: return "connected";
+    case Link::Resting: return "resting";
   }
   return "?";
 }

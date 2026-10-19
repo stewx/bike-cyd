@@ -4,7 +4,9 @@
 
 namespace bike {
 
-enum class Link { Scanning, Connecting, Initializing, Connected };
+// Resting: disconnected on purpose after 3 idle minutes, waiting for the
+// console to go to sleep before connecting again.
+enum class Link { Scanning, Connecting, Initializing, Connected, Resting };
 
 // Workout state as reported by the console.
 enum class Workout { Unknown, Idle, Running, Paused };

@@ -31,7 +31,9 @@ bool begin() {
     Serial.println("storage: no SD card");
     return false;
   }
-  if (!SD.exists("/rides")) SD.mkdir("/rides");
+  for (const char* dir : {"/rides", "/rides/pending", "/rides/done", "/rides/failed"}) {
+    if (!SD.exists(dir)) SD.mkdir(dir);
+  }
   // usedBytes() scans the FAT once, which can take a second on a big card
   current.mounted = true;
   current.type = typeName(SD.cardType());
