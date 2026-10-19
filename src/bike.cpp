@@ -79,6 +79,8 @@ static const Frame POLL_SEQUENCE[] = {FRAME(POLL1), FRAME(POLL2), FRAME(POLL3), 
 
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static Data current = {Link::Scanning, Workout::Unknown, 0, 0, 0, 0, 0, 0};
+static uint8_t unknownState = 0;  // last workout state byte we couldn't decode
+static uint8_t loggedState = 0;
 static File logFile;
 
 static void setLink(Link link) {
@@ -105,7 +107,7 @@ static void logFrame(const char* dir, const uint8_t* data, size_t len) {
 
 // A data message arrives as three 20-byte notifications:
 //   00 12 01 04 ...  resistance level x 500 (10-11), watts (12-13), distance m (14-15), cadence (18)
-//   01 12 ...        workout state (10), speed km/h x100 (13-14)
+//   01 12 ...        workout state flags (10), speed km/h x100 (13-14)
 //   ff 12 ...        not used yet
 // While the console is paused every value reads zero, so the last distance is kept.
 static void onNotify(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, bool) {
@@ -124,19 +126,29 @@ static void onNotify(NimBLERemoteCharacteristic*, uint8_t* d, size_t len, bool) 
     if (res >= 500 && res <= 20000) current.resistance = (res + 250) / 500;
     if (dist) current.distanceM = dist;
   } else if (d[0] == 0x01) {
-    switch (d[10]) {
-      case 0x0a: current.workout = Workout::Running; break;
-      case 0x03: current.workout = Workout::Paused; break;
-      case 0x01:
-        current.workout = Workout::Idle;
-        current.distanceM = 0;
-        break;
-      default: break;
-    }
+    // Workout state flags: 0x02 = workout active, 0x01 = stopped. Seen: 0x01
+    // idle, 0x03 paused, 0x02 and 0x0a running (0x08's meaning is unknown).
+    const uint8_t s = d[10];
     current.speedKmh = (d[13] | (d[14] << 8)) / 100.0f;
+    if (s == 0x01) {
+      current.workout = Workout::Idle;
+      current.distanceM = 0;
+    } else if ((s & 0x03) == 0x03) {
+      current.workout = Workout::Paused;
+    } else if (s & 0x02) {
+      current.workout = Workout::Running;
+    } else {
+      unknownState = s;
+      // Unknown state: going by the pedals is the safest guess
+      if (current.cadenceRpm || current.speedKmh > 0) current.workout = Workout::Running;
+    }
     current.updatedMs = millis();
   }
   portEXIT_CRITICAL(&lock);
+  if (unknownState != loggedState && unknownState) {
+    loggedState = unknownState;
+    Serial.printf("bike: unknown workout state 0x%02x\n", unknownState);
+  }
 }
 
 static bool write(NimBLERemoteCharacteristic* ch, const Frame& f) {
