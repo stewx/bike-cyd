@@ -42,9 +42,16 @@ struct Summary {
   unsigned maxCadence = 0;
 };
 
+// The console derives speed from cadence (about 0.33 km/h per rpm) and can
+// report a spike as a workout starts (38 km/h at 30 rpm), so implausible
+// speeds are replaced with the cadence-based value.
 static bool parseRow(const String& line, Sample& s) {
-  return sscanf(line.c_str(), "%f,%f,%u,%u,%lu,%u", &s.t, &s.kmh, &s.cadence, &s.watts, &s.distanceM,
-                &s.resistance) == 6;
+  if (sscanf(line.c_str(), "%f,%f,%u,%u,%lu,%u", &s.t, &s.kmh, &s.cadence, &s.watts, &s.distanceM,
+             &s.resistance) != 6) {
+    return false;
+  }
+  if (s.kmh > s.cadence * 0.6f + 5) s.kmh = s.cadence * 0.33f;
+  return true;
 }
 
 static bool summarize(File& f, Summary& sum) {

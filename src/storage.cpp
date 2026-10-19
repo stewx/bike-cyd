@@ -62,6 +62,16 @@ void listDir(Print& out, const char* path) {
   out.print("EOF\n");
 }
 
+void remove(Print& out, const char* path) {
+  bool ok = current.mounted && SD.remove(path);
+  out.printf("storage: rm %s %s\n", path, ok ? "ok" : "failed");
+}
+
+void move(Print& out, const char* from, const char* to) {
+  bool ok = current.mounted && SD.rename(from, to);
+  out.printf("storage: mv %s %s %s\n", from, to, ok ? "ok" : "failed");
+}
+
 void sendFile(Print& out, const char* path) {
   static constexpr char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   File f = current.mounted ? SD.open(path) : File();

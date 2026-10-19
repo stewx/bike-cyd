@@ -21,5 +21,7 @@ Status status();
 // lines, or sends a file as "FILE <path> <size>", base64 lines, "EOF".
 void listDir(Print& out, const char* path);
 void sendFile(Print& out, const char* path);
+void remove(Print& out, const char* path);
+void move(Print& out, const char* from, const char* to);
 
 }  // namespace storage
