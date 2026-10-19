@@ -31,7 +31,8 @@ bool begin() {
     Serial.println("storage: no SD card");
     return false;
   }
-  for (const char* dir : {"/rides", "/rides/pending", "/rides/done", "/rides/failed"}) {
+  for (const char* dir : {"/rides", "/rides/recording", "/rides/finished", "/rides/csv", "/rides/discarded",
+                          "/rides/pending", "/rides/done", "/rides/failed"}) {
     if (!SD.exists(dir)) SD.mkdir(dir);
   }
   // usedBytes() scans the FAT once, which can take a second on a big card

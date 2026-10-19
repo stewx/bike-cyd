@@ -7,6 +7,7 @@
 
 #include "ride.h"
 #include "storage.h"
+#include "tcx.h"
 
 // clang-format off
 #include <smb2/smb2.h>  // must come before libsmb2.h
@@ -190,6 +191,9 @@ static void waitAfterError() {
 
 static void run(void*) {
   for (;;) {
+    // Finished rides become TCX files in /rides/pending, even while the NAS is unreachable
+    if (storage::status().mounted) tcx::exportFinished();
+
     Settings cfg = loadSettings();
     if (!cfg.valid()) {
       setState(State::NotConfigured);

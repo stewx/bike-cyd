@@ -176,6 +176,9 @@ static void drawRide(const bike::Data& bd, const ride::Stats& rs) {
   char buf[24];
   drawSpeed(bd, rs.paused);
 
+  // Recording indicator in the top right corner of the speed area
+  g->fillSmoothCircle(W - 14, SPEED_TOP + 14 - oy, 5, rs.recording ? C_BAD : C_BG);
+
   const int cy = CARD_Y + CARD_H / 2;
   snprintf(buf, sizeof buf, "%.2f", rs.distanceM / 1000.0f);
   text(buf, cardX(0) + 114, cy + 9, textdatum_t::baseline_right, fBig, C_TEXT, C_CARD, 72);
@@ -334,7 +337,7 @@ static Snapshot snapshot() {
   s.bd.cadenceRpm = 56;
   s.bd.watts = 131;
   s.bd.resistance = 6;
-  s.rs = {true, (millis() / 5000) % 2 == 1, 21 * 60 + 43 + millis() / 1000, 6270, 17.3f, 22.0f};
+  s.rs = {true, (millis() / 5000) % 2 == 1, true, 21 * 60 + 43 + millis() / 1000, 6270, 17.3f, 22.0f};
 #endif
   return s;
 }

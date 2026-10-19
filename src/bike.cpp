@@ -263,10 +263,56 @@ static void run(void*) {
 
 void start() { xTaskCreatePinnedToCore(run, "bike", 8192, nullptr, 1, nullptr, 0); }
 
+static uint32_t simStartMs = 0;
+static uint32_t simLengthMs = 0;
+
+void simulate(uint32_t seconds) {
+  simStartMs = millis();
+  simLengthMs = seconds * 1000;
+  Serial.printf("bike: simulating a %lu s ride\n", (unsigned long)seconds);
+}
+
+// Made-up data in the shape the console sends: a message every 2.3 s,
+// running, then paused for 20 s halfway, then running, then ended.
+static bool simulated(Data& d) {
+  if (!simLengthMs) return false;
+  const uint32_t elapsed = millis() - simStartMs;
+  if (elapsed > simLengthMs + 15000) {
+    simLengthMs = 0;
+    Serial.println("bike: simulation over");
+    return false;
+  }
+  const uint32_t t = elapsed / 2300 * 2300;  // time of the latest message
+  const uint32_t pauseStart = simLengthMs / 2, pauseEnd = pauseStart + 20000;
+  const uint32_t ridden = t < pauseStart ? t : t < pauseEnd ? pauseStart : t - 20000;
+
+  d.link = Link::Connected;
+  d.updatedMs = simStartMs + t;
+  d.resistance = 8;
+  d.distanceM = (uint32_t)(ridden / 1000.0f * 6.9f);  // about 25 km/h
+  if (t >= simLengthMs) {
+    d.workout = Workout::Idle;
+  } else if (t >= pauseStart && t < pauseEnd) {
+    d.workout = Workout::Paused;
+  } else {
+    d.workout = Workout::Running;
+    float s = ridden / 1000.0f;
+    d.cadenceRpm = (uint16_t)(75 + 10 * sinf(s * 6.2832f / 60));
+    d.speedKmh = d.cadenceRpm * 0.33f;
+    d.watts = (uint16_t)(140 + 50 * sinf(s * 6.2832f / 45));
+    return true;
+  }
+  d.cadenceRpm = 0;
+  d.speedKmh = 0;
+  d.watts = 0;
+  return true;
+}
+
 Data get() {
   portENTER_CRITICAL(&lock);
   Data copy = current;
   portEXIT_CRITICAL(&lock);
+  simulated(copy);
   return copy;
 }
 

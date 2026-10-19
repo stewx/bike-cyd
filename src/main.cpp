@@ -42,6 +42,7 @@ void setup() {
 
   ui::begin();
   storage::begin();
+  ride::begin();
   net::begin();
   bike::start();
   nas::start();
@@ -56,7 +57,7 @@ void loop() {
 
   // Serial commands: 'S' dumps the screen (tools/screenshot.py);
   // ":ls <dir>" and ":get <file>" read the SD card (tools/sdfile.py);
-  // ":nas ..." configures the NAS uploader
+  // ":nas ..." configures the NAS uploader; ":sim <seconds>" fakes a ride
   static String cmd;
   static bool inCmd = false;
   while (Serial.available()) {
@@ -67,6 +68,7 @@ void loop() {
         if (cmd.startsWith("ls ")) storage::listDir(Serial, cmd.substring(3).c_str());
         else if (cmd.startsWith("get ")) storage::sendFile(Serial, cmd.substring(4).c_str());
         else if (cmd == "nas" || cmd.startsWith("nas ")) nas::command(Serial, cmd.substring(4));
+        else if (cmd.startsWith("sim ")) bike::simulate(cmd.substring(4).toInt());
         inCmd = false;
       } else if (cmd.length() < 120) {
         cmd += c;
