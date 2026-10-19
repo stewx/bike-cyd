@@ -13,6 +13,7 @@
 #include "net.h"
 #include "ride.h"
 #include "storage.h"
+#include "touch.h"
 #include "ui.h"
 
 // Any watched task (main loop, bike, NAS upload) that stops checking in for
@@ -162,6 +163,18 @@ static void handleCommand(String cmd) {
     if (sp > 0) storage::move(Serial, cmd.substring(3, sp).c_str(), cmd.substring(sp + 1).c_str());
   } else if (cmd.startsWith("ota pass ")) {
     setOtaPassword(cmd.substring(9));
+  } else if (cmd == "ldr") {
+    // Calibration: 20 light sensor readings, half a second apart
+    for (int i = 0; i < 20; i++) {
+      Serial.printf("ldr: %d\n", analogRead(PIN_LDR));
+      esp_task_wdt_reset();
+      delay(500);
+    }
+  } else if (cmd == "hang") {
+    // Test: freeze the main loop so the task watchdog restarts the board
+    logger::printf("main: hanging on purpose to test the watchdog\n");
+    logger::flush(true);
+    for (;;) delay(1000);
   } else if (cmd == "reboot") {
     logger::printf("main: restart requested over serial\n");
     logger::flush(true);
@@ -203,7 +216,9 @@ void setup() {
     pinMode(pin, OUTPUT);
     digitalWrite(pin, HIGH);
   }
-  pinMode(PIN_TOUCH_IRQ, INPUT);
+  touch::begin();
+  // The light sensor only moves away from 0 on the most sensitive range
+  analogSetPinAttenuation(PIN_LDR, ADC_0db);
 
   const esp_task_wdt_config_t wdt = {
       .timeout_ms = WATCHDOG_MS, .idle_core_mask = (1 << 0) | (1 << 1), .trigger_panic = true};
@@ -212,7 +227,11 @@ void setup() {
 
   net::setTimeZone();
   Serial.println();
-  logger::printf("bike-cyd %s starting (reset: %s)\n", FW_VERSION, resetReason());
+  // The ELF hash tells builds apart even when FW_VERSION hasn't changed
+  char build[9];
+  esp_app_get_elf_sha256(build, sizeof build);
+  logger::printf("bike-cyd %s (build %s, %s) starting (reset: %s)\n", FW_VERSION, build,
+                 esp_ota_get_running_partition()->label, resetReason());
 
   ui::begin();
   storage::begin();
@@ -236,7 +255,15 @@ void loop() {
   if (otaStarted) ArduinoOTA.handle();
   checkHealthy();
 
-  if (digitalRead(PIN_TOUCH_IRQ) == LOW) ui::wake();
+  static bool wasTouched = false;
+  static uint32_t lastTouchCheck = 0;
+  if (millis() - lastTouchCheck >= 50) {
+    lastTouchCheck = millis();
+    bool touched = touch::touched();
+    if (touched) ui::wake();
+    if (touched && !wasTouched) logger::printf("main: screen touched\n");
+    wasTouched = touched;
+  }
 
   uint32_t now = millis();
   if (now - lastDraw >= 1000) {

@@ -78,7 +78,8 @@ static void startRide(const bike::Data& d) {
   } else {
     snprintf(name, sizeof name, "nosync-%08lx.csv", (unsigned long)esp_random());
   }
-  fileName = name;
+  // Simulated test rides are marked so they never pass for real ones
+  fileName = bike::simulating() ? String("sim-") + name : String(name);
   file = SD.open(String(RECORDING_DIR) + "/" + fileName, FILE_WRITE);
   if (!file) {
     logger::printf("ride: could not create %s\n", name);

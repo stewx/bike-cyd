@@ -148,16 +148,18 @@ static void writeTcx(File& in, File& out, const Summary& sum) {
       "</TrainingCenterDatabase>\n");
 }
 
-// "2026-10-18_2145.tcx" in local time, made unique against earlier uploads
-static String tcxName(long startEpoch) {
+// "2026-10-18_2145.tcx" in local time (with "sim-" in front for simulated
+// rides), made unique against earlier uploads
+static String tcxName(long startEpoch, const String& csvName) {
   time_t t = startEpoch;
   struct tm tm;
   localtime_r(&t, &tm);
-  char base[24];
-  strftime(base, sizeof base, "%Y-%m-%d_%H%M", &tm);
-  String name = String(base) + ".tcx";
+  char stamp[24];
+  strftime(stamp, sizeof stamp, "%Y-%m-%d_%H%M", &tm);
+  String base = csvName.startsWith("sim-") ? String("sim-") + stamp : String(stamp);
+  String name = base + ".tcx";
   for (int n = 2; SD.exists(String(PENDING_DIR) + "/" + name) || SD.exists(String(DONE_DIR) + "/" + name); n++) {
-    name = String(base) + "_" + n + ".tcx";
+    name = base + "_" + n + ".tcx";
   }
   return name;
 }
@@ -195,7 +197,7 @@ static bool exportOne(const String& csvName) {
   }
 
   // Written next to the CSV first, so the uploader never sees a partial file
-  const String name = tcxName(sum.startEpoch);
+  const String name = tcxName(sum.startEpoch, csvName);
   const String tmpPath = String(FINISHED_DIR) + "/" + name + ".tmp";
   File out = SD.open(tmpPath, FILE_WRITE);
   if (!out) {

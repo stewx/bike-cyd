@@ -24,5 +24,9 @@ constexpr int PIN_LED_B = 17;
 // Light sensor (LDR)
 constexpr int PIN_LDR = 34;
 
-// Touch controller (XPT2046) interrupt line: low while the screen is touched
+// Touch controller (XPT2046) on its own pins; IRQ is low while touched
 constexpr int PIN_TOUCH_IRQ = 36;
+constexpr int PIN_TOUCH_MOSI = 32;
+constexpr int PIN_TOUCH_MISO = 39;
+constexpr int PIN_TOUCH_CLK = 25;
+constexpr int PIN_TOUCH_CS = 33;

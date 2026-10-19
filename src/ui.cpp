@@ -10,6 +10,7 @@
 #include "net.h"
 #include "ride.h"
 #include "storage.h"
+#include "touch.h"
 
 // Ride screen layout is design C ("big and simple") from the Ride Screen
 // Designs canvas: large speed, distance and time cards, one line of
@@ -215,14 +216,19 @@ static void row(int i, const char* label, const char* value, uint16_t color) {
 static void drawIdle(const net::Status& ns, const storage::Status& ss, const bike::Data& bd,
                      const nas::Status& us) {
   char buf[64];
-  if (!ns.configured) row(0, "WiFi", "no settings stored", C_BAD);
-  else if (ns.connected) row(0, "WiFi", ns.ssid.c_str(), C_GREEN);
-  else {
+  if (!ns.configured) {
+    row(0, "WiFi", "no settings stored", C_BAD);
+  } else if (ns.connected) {
+    snprintf(buf, sizeof buf, "%s, %s", ns.ssid.c_str(), ns.ip.c_str());
+    row(0, "WiFi", buf, C_GREEN);
+  } else {
     snprintf(buf, sizeof buf, "connecting to %s", ns.ssid.c_str());
     row(0, "WiFi", buf, C_AMBER);
   }
 
-  row(1, "IP", ns.connected ? ns.ip.c_str() : "-", C_TEXT);
+  // Live readings, for calibrating the light sensor and checking touch
+  snprintf(buf, sizeof buf, "light %d, touch %s", analogRead(PIN_LDR), touch::touched() ? "yes" : "no");
+  row(1, "Sensors", buf, C_TEXT);
 
   if (net::timeSynced()) {
     time_t now = time(nullptr);
@@ -361,6 +367,8 @@ static constexpr uint32_t FULL_MS = 2 * 60 * 1000;
 static constexpr uint32_t DIM_MS = 30 * 60 * 1000;
 static constexpr uint8_t FULL = 255;
 static constexpr uint8_t DIMMED = 40;
+static constexpr uint8_t NIGHT_FULL = 80;     // "full" brightness in a dark room
+static constexpr float DARK_READING = 600;    // light sensor value counted as dark
 static int brightness = -1;
 
 void wake() { lastActivity = millis(); }
@@ -372,8 +380,15 @@ static void updateBacklight(const Snapshot& s) {
   if (s.rs.active || (linked && !wasLinked)) wake();
   wasLinked = linked;
 
+  // The light sensor reads 0 in any daylight and up to ~1000 in the dark, so
+  // it only matters at night: full brightness fades to ~30% as it gets dark.
+  static float ambient = 0;
+  ambient += (analogRead(PIN_LDR) - ambient) * 0.1f;  // smooth over ~10 s
+  float darkness = constrain(ambient / DARK_READING, 0.0f, 1.0f);
+  int full = FULL - (int)(darkness * (FULL - NIGHT_FULL));
+
   uint32_t idle = millis() - lastActivity;
-  int level = idle < FULL_MS ? FULL : idle < DIM_MS ? DIMMED : 0;
+  int level = idle < FULL_MS ? full : idle < DIM_MS ? min((int)DIMMED, full) : 0;
   if (level != brightness) {
     lcd.setBrightness(level);
     brightness = level;

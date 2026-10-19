@@ -29,6 +29,7 @@ Data get();
 // Testing: makes get() return a made-up ride of the given length (with a
 // 20 s pause in the middle) instead of the real bike's data.
 void simulate(uint32_t seconds);
+bool simulating();
 const char* linkText(Link link);
 
 }  // namespace bike

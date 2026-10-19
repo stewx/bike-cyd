@@ -308,6 +308,8 @@ void start() { xTaskCreatePinnedToCore(run, "bike", 8192, nullptr, 1, nullptr, 0
 static uint32_t simStartMs = 0;
 static uint32_t simLengthMs = 0;
 
+bool simulating() { return simLengthMs != 0; }
+
 void simulate(uint32_t seconds) {
   simStartMs = millis();
   simLengthMs = seconds * 1000;
