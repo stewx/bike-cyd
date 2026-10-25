@@ -1,15 +1,18 @@
 #include "ui.h"
 
 #include <esp_heap_caps.h>
+#include <esp_task_wdt.h>
 #include <time.h>
 
 #include "bike.h"
 #include "display.h"
 #include "fonts/fonts_data.h"
+#include "logger.h"
 #include "nas.h"
 #include "net.h"
 #include "ride.h"
 #include "storage.h"
+#include "tcx.h"
 #include "touch.h"
 
 // Ride screen layout is design C ("big and simple") from the Ride Screen
@@ -35,9 +38,9 @@ struct SmoothFont {
   }
 };
 
-static SmoothFont fSpeed, fBig, fMid, fPaused;
+static SmoothFont fSpeed, fBig, fMid, fPaused, fTitle, fText18;
 static SmoothFont fLabel12, fLabel13, fLabel15;
-static SmoothFont fIcon14, fIcon18, fIcon22, fIcon40;
+static SmoothFont fIcon14, fIcon18, fIcon20, fIcon22, fIcon26, fIcon40;
 
 static constexpr int W = 320;
 static constexpr int H = 240;
@@ -59,13 +62,32 @@ static constexpr int ROW_Y = BAR_H + 10;
 static constexpr int ROW_H = 22;
 static constexpr int VALUE_X = 92;
 
-enum class Screen { None, Idle, Ride };
+// Paused screen (design P1): header, two cards, one big button
+static constexpr int P_CARD_Y = 92;
+static constexpr int P_CARD_H = 50;
+static constexpr int P_CARD_W = 148;
+static constexpr int BTN_X = 8;
+static constexpr int BTN_Y = 150;
+static constexpr int BTN_W = 304;
+static constexpr int BTN_H = 72;
+static constexpr uint32_t CONFIRM_MS = 5000;
+
+// Ride saved screen
+static constexpr uint32_t SAVED_SHOW_MS = 3 * 60 * 1000;
+
+enum class Screen { None, Idle, Ride, Paused, Saved };
 static Screen shown = Screen::None;
 static uint32_t lastActivity = 0;  // for the backlight timeout
 static bool shownPaused = false;
 
+static bool confirming = false;    // paused screen: first tap done, waiting for the second
+static uint32_t confirmUntil = 0;
+static int drawnButton = -1;       // which button face is on screen (-1 none, 0 end, 1 confirm)
+static uint32_t dismissedFor = 0;  // endedMs of the ride whose saved screen was tapped away
+static int drawnSavedState = -1;
+
 static uint16_t C_BG, C_CARD, C_LINE, C_TEXT, C_DIM, C_GREEN, C_BLUE, C_VIOLET, C_CYAN, C_TEAL, C_AMBER, C_PINK,
-    C_PAUSED, C_BAD;
+    C_PAUSED, C_BAD, C_SOFT, C_OK_BG, C_CONFIRM_BG, C_CONFIRM_SUB;
 
 static void text(const char* s, int x, int y, textdatum_t datum, SmoothFont& f, uint16_t fg, uint16_t bg, int pad = 0) {
   g->setFont(&f.font);
@@ -205,6 +227,166 @@ static void drawRide(const bike::Data& bd, const ride::Stats& rs) {
   text(buf, 260, ly, textdatum_t::middle_left, fMid, C_TEXT, C_BG, 54);
 }
 
+static void formatDuration(char* buf, size_t len, uint32_t s) {
+  if (s >= 3600) {
+    snprintf(buf, len, "%lu:%02lu:%02lu", (unsigned long)(s / 3600), (unsigned long)(s / 60 % 60),
+             (unsigned long)(s % 60));
+  } else {
+    snprintf(buf, len, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+  }
+}
+
+// ---------------------------------------------------------------- paused screen
+
+static int pCardX(int col) { return 8 + col * (P_CARD_W + 8); }
+
+static void drawPausedStatic() {
+  // Header: pause icon and PAUSED, centred, with a hint below
+  g->setFont(&fTitle.font);
+  int tw = g->textWidth("PAUSED");
+  int x0 = W / 2 - (26 + 10 + tw) / 2;
+  text(icon::PAUSE, x0, 54, textdatum_t::middle_left, fIcon26, C_PAUSED, C_BG);
+  text("PAUSED", x0 + 36, 54, textdatum_t::middle_left, fTitle, C_PAUSED, C_BG);
+  text("Pedal to resume", W / 2, 80, textdatum_t::middle_center, fLabel12, C_DIM, C_BG);
+
+  for (int col = 0; col < 2; col++) {
+    g->fillSmoothRoundRect(pCardX(col), P_CARD_Y - oy, P_CARD_W, P_CARD_H, 10, C_CARD);
+  }
+  const int cy = P_CARD_Y + P_CARD_H / 2;
+  text(icon::DISTANCE, pCardX(0) + 12, cy, textdatum_t::middle_left, fIcon22, C_GREEN, C_CARD);
+  text("km", pCardX(0) + 114, cy + 9, textdatum_t::baseline_left, fLabel13, C_DIM, C_CARD);
+  text(icon::TIME, pCardX(1) + 12, cy, textdatum_t::middle_left, fIcon22, C_VIOLET, C_CARD);
+  drawnButton = -1;
+}
+
+static void drawButton(bool confirm) {
+  const int cy = BTN_Y + BTN_H / 2;
+  if (!confirm) {
+    g->fillSmoothRoundRect(BTN_X, BTN_Y - oy, BTN_W, BTN_H, 14, C_GREEN);
+    const char* label = "End ride & upload";
+    g->setFont(&fTitle.font);
+    int x0 = W / 2 - (26 + 12 + g->textWidth(label)) / 2;
+    text(icon::FLAG, x0, cy, textdatum_t::middle_left, fIcon26, C_BG, C_GREEN);
+    text(label, x0 + 38, cy, textdatum_t::middle_left, fTitle, C_BG, C_GREEN);
+  } else {
+    g->fillSmoothRoundRect(BTN_X, BTN_Y - oy, BTN_W, BTN_H, 14, C_PAUSED);
+    g->fillSmoothRoundRect(BTN_X + 2, BTN_Y + 2 - oy, BTN_W - 4, BTN_H - 4, 12, C_CONFIRM_BG);
+    text("Tap again to end ride", W / 2, cy - 9, textdatum_t::middle_center, fTitle, C_PAUSED, C_CONFIRM_BG);
+    text("Cancels by itself in 5 s", W / 2, cy + 18, textdatum_t::middle_center, fLabel12, C_CONFIRM_SUB,
+         C_CONFIRM_BG);
+  }
+  drawnButton = confirm ? 1 : 0;
+}
+
+static void drawPaused(const ride::Stats& rs) {
+  char buf[24];
+  const int cy = P_CARD_Y + P_CARD_H / 2;
+  // The 36 px font's padding box is taller than these cards; keep it inside
+  g->setClipRect(0, P_CARD_Y + 4 - oy, W, P_CARD_H - 8);
+  snprintf(buf, sizeof buf, "%.2f", rs.distanceM / 1000.0f);
+  text(buf, pCardX(0) + 110, cy + 9, textdatum_t::baseline_right, fBig, C_TEXT, C_CARD, 70);
+  formatDuration(buf, sizeof buf, rs.movingSeconds);
+  text(buf, pCardX(1) + 42, cy + 9, textdatum_t::baseline_left, fBig, C_TEXT, C_CARD, 100);
+  g->clearClipRect();
+
+  if (confirming && (int32_t)(millis() - confirmUntil) > 0) confirming = false;
+  if (drawnButton != (confirming ? 1 : 0)) drawButton(confirming);
+}
+
+// ---------------------------------------------------------------- ride saved screen
+
+enum class Saved { Saving, Uploading, Uploaded, Offline, TooShort, Failed, NotRecorded };
+
+static Saved savedState(const ride::Summary& last, const nas::Status& us, tcx::Result& result) {
+  if (!last.csvName[0]) return Saved::NotRecorded;
+  result = tcx::lastResult();
+  if (strcmp(result.csv, last.csvName) != 0 || result.outcome == tcx::Outcome::None) return Saved::Saving;
+  if (result.outcome == tcx::Outcome::TooShort) return Saved::TooShort;
+  if (result.outcome == tcx::Outcome::Failed) return Saved::Failed;
+  char uploaded[48];
+  nas::lastUploaded(uploaded, sizeof uploaded);
+  if (strcmp(uploaded, result.tcx) == 0) return Saved::Uploaded;
+  if (us.state == nas::State::Waiting || us.state == nas::State::Offline ||
+      us.state == nas::State::NotConfigured) {
+    return Saved::Offline;
+  }
+  return Saved::Uploading;
+}
+
+static void drawSaved(const ride::Summary& last, const nas::Status& us) {
+  tcx::Result result = {};
+  Saved state = savedState(last, us, result);
+  if ((int)state == drawnSavedState) return;
+  drawnSavedState = (int)state;
+
+  const bool kept = state == Saved::Saving || state == Saved::Uploading || state == Saved::Uploaded ||
+                    state == Saved::Offline;
+  fillRect(0, BAR_H, W, H - BAR_H, C_BG);
+
+  // Big check (or a warning) and the title
+  g->fillSmoothCircle(W / 2, 66 - oy, 26, kept ? C_OK_BG : C_CONFIRM_BG);
+  text(kept ? icon::CHECK : icon::CLOUD_ALERT, W / 2, 66, textdatum_t::middle_center, kept ? fIcon26 : fIcon20,
+       kept ? C_GREEN : C_AMBER, kept ? C_OK_BG : C_CONFIRM_BG);
+  text(kept ? "Ride saved" : "Ride ended", W / 2, 112, textdatum_t::middle_center, fTitle, C_TEXT, C_BG);
+
+  char buf[64], dur[16];
+  formatDuration(dur, sizeof dur, last.movingSeconds);
+  snprintf(buf, sizeof buf, "%.2f km \xC2\xB7 %s \xC2\xB7 %.1f km/h avg", last.distanceM / 1000.0f, dur, last.avgKmh);
+  text(buf, W / 2, 140, textdatum_t::middle_center, fText18, C_SOFT, C_BG);
+
+  // Upload status card
+  const int cardY = 158, cardH = 54, cy = cardY + cardH / 2;
+  g->fillSmoothRoundRect(12, cardY - oy, W - 24, cardH, 10, C_CARD);
+  const char* ic = icon::CLOUD_UP;
+  uint16_t color = C_BLUE;
+  const char* line1 = "";
+  String line2;
+  switch (state) {
+    case Saved::Saving: line1 = "Saving the ride..."; break;
+    case Saved::Uploading:
+      line1 = "Uploading to the NAS...";
+      line2 = result.tcx;
+      break;
+    case Saved::Uploaded:
+      ic = icon::CLOUD_OK;
+      color = C_GREEN;
+      line1 = "On the NAS";
+      line2 = String("BikeRides\\") + result.tcx;
+      break;
+    case Saved::Offline:
+      ic = icon::CLOUD_ALERT;
+      color = C_AMBER;
+      line1 = "NAS not reachable";
+      line2 = "Saved on the SD card, uploads when it's back";
+      break;
+    case Saved::TooShort:
+      ic = icon::CLOUD_ALERT;
+      color = C_AMBER;
+      line1 = "Too short to keep";
+      line2 = "Rides need 2 minutes and 0.5 km";
+      break;
+    case Saved::Failed:
+      ic = icon::CLOUD_ALERT;
+      color = C_BAD;
+      line1 = "Couldn't save the ride";
+      line2 = "Its data is kept on the SD card";
+      break;
+    case Saved::NotRecorded:
+      ic = icon::CLOUD_ALERT;
+      color = C_BAD;
+      line1 = "Not recorded";
+      line2 = "No SD card was found";
+      break;
+  }
+  text(ic, 24, cy, textdatum_t::middle_left, fIcon20, color, C_CARD);
+  if (line2.length()) {
+    text(line1, 54, cy - 9, textdatum_t::middle_left, fLabel15, color, C_CARD);
+    text(line2.c_str(), 54, cy + 11, textdatum_t::middle_left, fLabel12, C_DIM, C_CARD);
+  } else {
+    text(line1, 54, cy, textdatum_t::middle_left, fLabel15, color, C_CARD);
+  }
+}
+
 // ---------------------------------------------------------------- idle screen
 
 static void row(int i, const char* label, const char* value, uint16_t color) {
@@ -288,6 +470,11 @@ static void showScreen(Screen s) {
   if (s == Screen::Ride) {
     shownPaused = true;  // forces drawSpeed to lay out the speed area
     drawRideStatic();
+  } else if (s == Screen::Paused) {
+    confirming = false;
+    drawPausedStatic();
+  } else if (s == Screen::Saved) {
+    drawnSavedState = -1;
   }
 }
 
@@ -301,12 +488,16 @@ void begin() {
   fBig.load(font_big, sizeof font_big);
   fMid.load(font_mid, sizeof font_mid);
   fPaused.load(font_paused, sizeof font_paused);
+  fTitle.load(font_title, sizeof font_title);
+  fText18.load(font_text18, sizeof font_text18);
   fLabel12.load(font_label12, sizeof font_label12);
   fLabel13.load(font_label13, sizeof font_label13);
   fLabel15.load(font_label15, sizeof font_label15);
   fIcon14.load(icons14, sizeof icons14);
   fIcon18.load(icons18, sizeof icons18);
+  fIcon20.load(icons20, sizeof icons20);
   fIcon22.load(icons22, sizeof icons22);
+  fIcon26.load(icons26, sizeof icons26);
   fIcon40.load(icons40, sizeof icons40);
 
   C_BG = lcd.color565(0x07, 0x08, 0x0d);
@@ -323,6 +514,10 @@ void begin() {
   C_PINK = lcd.color565(0xff, 0x6b, 0x9a);
   C_PAUSED = lcd.color565(0xff, 0xc5, 0x3d);
   C_BAD = lcd.color565(0xff, 0x5c, 0x5c);
+  C_SOFT = lcd.color565(0xc9, 0xcd, 0xd8);
+  C_OK_BG = lcd.color565(0x17, 0x3a, 0x2b);
+  C_CONFIRM_BG = lcd.color565(0x2a, 0x21, 0x0b);
+  C_CONFIRM_SUB = lcd.color565(0xc9, 0xa7, 0x5a);
 
   lcd.fillScreen(C_BG);
   drawBarFrame();
@@ -352,9 +547,16 @@ static Snapshot snapshot() {
 
 static void render(const Snapshot& s) {
   drawBar(s.ns, s.ss, s.bd, s.us);
-  if (s.rs.active) {
+  const ride::Summary last = ride::lastRide();
+  if (s.rs.active && s.rs.paused) {
+    showScreen(Screen::Paused);
+    drawPaused(s.rs);
+  } else if (s.rs.active) {
     showScreen(Screen::Ride);
     drawRide(s.bd, s.rs);
+  } else if (last.valid && last.endedMs != dismissedFor && millis() - last.endedMs < SAVED_SHOW_MS) {
+    showScreen(Screen::Saved);
+    drawSaved(last, s.us);
   } else {
     showScreen(Screen::Idle);
     drawIdle(s.ns, s.ss, s.bd, s.us);
@@ -398,7 +600,110 @@ static void updateBacklight(const Snapshot& s) {
 void draw() {
   Snapshot s = snapshot();
   updateBacklight(s);
+  // A ride just ended: have the uploader export and upload it right away
+  static uint32_t kickedFor = 0;
+  const ride::Summary last = ride::lastRide();
+  if (last.valid && last.endedMs != kickedFor) {
+    kickedFor = last.endedMs;
+    nas::kick();
+  }
   render(s);
+}
+
+// ---------------------------------------------------------------- touch
+
+void press(bool havePosition, int x, int y) {
+  bool wasDark = millis() - lastActivity >= FULL_MS;
+  wake();
+  if (wasDark) return;  // a touch on a dimmed screen only wakes it
+
+  if (shown == Screen::Saved) {
+    dismissedFor = ride::lastRide().endedMs;
+    draw();
+  } else if (shown == Screen::Paused && havePosition) {
+    bool onButton = x >= BTN_X - 4 && x < BTN_X + BTN_W + 4 && y >= BTN_Y - 10 && y < BTN_Y + BTN_H + 10;
+    if (!onButton) return;
+    if (!confirming) {
+      confirming = true;
+      confirmUntil = millis() + CONFIRM_MS;
+      drawButton(true);
+    } else {
+      confirming = false;
+      ride::endNow();
+      draw();
+    }
+  }
+}
+
+static void drawTarget(int x, int y) {
+  lcd.drawCircle(x, y, 14, C_GREEN);
+  lcd.drawCircle(x, y, 13, C_GREEN);
+  lcd.fillCircle(x, y, 3, C_GREEN);
+  lcd.drawFastHLine(x - 22, y, 44, C_GREEN);
+  lcd.drawFastVLine(x, y - 22, 44, C_GREEN);
+}
+
+// Waits for one firm press and returns its averaged raw reading
+static bool waitForPress(uint16_t raw[2]) {
+  uint32_t start = millis();
+  while (touch::touched()) {
+    esp_task_wdt_reset();
+    delay(10);
+  }
+  while (!touch::touched()) {
+    if (millis() - start > 30000) return false;
+    esp_task_wdt_reset();
+    delay(10);
+  }
+  delay(80);  // let the reading settle
+  uint32_t sx = 0, sy = 0;
+  int n = 0;
+  for (int i = 0; i < 12; i++) {
+    uint16_t rx, ry;
+    if (touch::readRaw(rx, ry)) {
+      sx += rx;
+      sy += ry;
+      n++;
+    }
+    delay(10);
+  }
+  while (touch::touched()) {
+    esp_task_wdt_reset();
+    delay(10);
+  }
+  if (n < 4) return false;
+  raw[0] = sx / n;
+  raw[1] = sy / n;
+  return true;
+}
+
+bool calibrateTouch() {
+  static const int targets[3][2] = {{30, 54}, {290, 54}, {290, 210}};
+  uint16_t raw[3][2];
+  lcd.setBrightness(FULL);
+  brightness = FULL;
+  bool ok = true;
+  for (int i = 0; i < 3 && ok; i++) {
+    lcd.fillScreen(C_BG);
+    text("Touch calibration", W / 2, 112, textdatum_t::middle_center, fTitle, C_TEXT, C_BG);
+    char buf[48];
+    snprintf(buf, sizeof buf, "Press the green target firmly (%d of 3)", i + 1);
+    text(buf, W / 2, 142, textdatum_t::middle_center, fLabel13, C_DIM, C_BG);
+    drawTarget(targets[i][0], targets[i][1]);
+    ok = waitForPress(raw[i]);
+    logger::printf("ui: calibration point %d raw %u,%u%s\n", i + 1, raw[i][0], raw[i][1], ok ? "" : " (timed out)");
+  }
+  if (ok) ok = touch::calibrate(raw, targets);
+  lcd.fillScreen(C_BG);
+  text(ok ? "Touch calibrated" : "Calibration failed", W / 2, 120, textdatum_t::middle_center, fTitle,
+       ok ? C_GREEN : C_BAD, C_BG);
+  logger::printf("ui: touch calibration %s\n", ok ? "saved" : "failed");
+  delay(1500);
+  lcd.fillScreen(C_BG);
+  drawBarFrame();
+  shown = Screen::None;
+  wake();
+  return ok;
 }
 
 void otaProgress(int percent) {
@@ -425,7 +730,8 @@ void otaProgress(int percent) {
 void screenshot(Print& out) {
   // The panel's read-back returns corrupted pixels on this board, so the
   // screen is re-rendered into a strip sprite one band at a time instead.
-  static constexpr int BAND = 40;
+  // 20 rows = 12.8 KB, small enough to find even right after an upload
+  static constexpr int BAND = 20;
   LGFX_Sprite strip(&lcd);
   strip.setColorDepth(16);
   if (!strip.createSprite(W, BAND)) {

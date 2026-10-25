@@ -28,6 +28,7 @@ static time_t startEpoch = 0;       // 0 until the clock is known
 
 static File file;
 static String fileName;
+static Summary last = {};
 
 static void moveFile(const char* toDir) {
   String from = String(RECORDING_DIR) + "/" + fileName;
@@ -64,6 +65,7 @@ static void startRide(const bike::Data& d) {
   lastSampleMs = 0;
   baseDistanceM = d.distanceM;
   startEpoch = 0;
+  fileName = "";
 
   if (!storage::status().mounted) {
     logger::printf("ride: no SD card, not recording\n");
@@ -94,13 +96,28 @@ static void startRide(const bike::Data& d) {
 static void endRide() {
   logger::printf("ride: ended after %lu s moving, %lu m\n", (unsigned long)current.movingSeconds,
                 (unsigned long)current.distanceM);
+  last = {};
+  last.valid = true;
   if (file) {
     noteStartTime();
     file.close();
     moveFile(FINISHED_DIR);
+    strlcpy(last.csvName, fileName.c_str(), sizeof last.csvName);
   }
+  last.movingSeconds = current.movingSeconds;
+  last.distanceM = current.distanceM;
+  last.avgKmh = current.avgKmh;
+  last.endedMs = millis();
   current = {};
 }
+
+void endNow() {
+  if (!current.active) return;
+  logger::printf("ride: ended from the screen\n");
+  endRide();
+}
+
+Summary lastRide() { return last; }
 
 void tick(const bike::Data& d) {
   const uint32_t now = millis();

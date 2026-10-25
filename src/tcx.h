@@ -11,4 +11,14 @@ namespace tcx {
 // Returns the number of TCX files written.
 int exportFinished();
 
+enum class Outcome { None, Exported, TooShort, Failed };
+
+// What happened to the most recently exported ride CSV
+struct Result {
+  char csv[40];
+  char tcx[40];  // set when exported
+  Outcome outcome;
+};
+Result lastResult();
+
 }  // namespace tcx

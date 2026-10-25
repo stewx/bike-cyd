@@ -163,6 +163,23 @@ static void handleCommand(String cmd) {
     if (sp > 0) storage::move(Serial, cmd.substring(3, sp).c_str(), cmd.substring(sp + 1).c_str());
   } else if (cmd.startsWith("ota pass ")) {
     setOtaPassword(cmd.substring(9));
+  } else if (cmd == "touchcal") {
+    ui::calibrateTouch();
+  } else if (cmd == "touch") {
+    // Prints where each press lands, for 20 s, to check the calibration
+    bool was = false;
+    for (uint32_t start = millis(); millis() - start < 20000;) {
+      esp_task_wdt_reset();
+      int x, y;
+      bool now = touch::touched();
+      if (now && !was) {
+        delay(20);
+        if (touch::read(x, y)) Serial.printf("touch: %d,%d\n", x, y);
+        else Serial.println("touch: pressed (not calibrated)");
+      }
+      was = now;
+      delay(10);
+    }
   } else if (cmd == "ldr") {
     // Calibration: 20 light sensor readings, half a second apart
     for (int i = 0; i < 20; i++) {
@@ -185,7 +202,7 @@ static void handleCommand(String cmd) {
 
 // 'S' dumps the screen (tools/screenshot.py); ":<command>\n" runs a command:
 // ls/get/rm/mv (SD card, tools/sdfile.py), nas ..., sim <seconds>,
-// ota pass <password>, reboot
+// ota pass <password>, touchcal, touch, ldr, hang, reboot
 static void readSerial() {
   static String cmd;
   static bool inCmd = false;
@@ -257,11 +274,17 @@ void loop() {
 
   static bool wasTouched = false;
   static uint32_t lastTouchCheck = 0;
-  if (millis() - lastTouchCheck >= 50) {
+  if (millis() - lastTouchCheck >= 30) {
     lastTouchCheck = millis();
     bool touched = touch::touched();
-    if (touched) ui::wake();
-    if (touched && !wasTouched) logger::printf("main: screen touched\n");
+    if (touched && !wasTouched) {
+      int x = 0, y = 0;
+      delay(20);  // let the press settle before reading where it is
+      bool havePosition = touch::read(x, y);
+      ui::press(havePosition, x, y);
+    } else if (touched) {
+      ui::wake();
+    }
     wasTouched = touched;
   }
 

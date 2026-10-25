@@ -40,6 +40,8 @@ ICON_NAMES = {
     "CLOUD_UP": "cloud-upload",
     "CLOUD_ALERT": "cloud-alert",
     "CLOUD_OFF": "cloud-off",
+    "FLAG": "flag",
+    "CHECK": "check",
 }
 
 
@@ -53,6 +55,9 @@ SPECS = [
     ("font_big", "BarlowSemiCondensed-SemiBold.ttf", 36, DIGITS + ":%"),
     ("font_mid", "BarlowSemiCondensed-SemiBold.ttf", 17, DIGITS + ": W"),
     ("font_paused", "BarlowSemiCondensed-Bold.ttf", 44, " ADEPSU"),
+    # Paused and ride-saved screens: titles and button labels, summary line
+    ("font_title", "BarlowSemiCondensed-Bold.ttf", 26, ASCII),
+    ("font_text18", "BarlowSemiCondensed-SemiBold.ttf", 18, ASCII + "·"),
     ("font_label12", "Barlow-Medium.ttf", 12, ASCII),
     ("font_label13", "Barlow-Medium.ttf", 13, ASCII),
     ("font_label15", "Barlow-Medium.ttf", 15, ASCII),
@@ -61,6 +66,8 @@ SPECS = [
            "CLOUD_OK", "CLOUD_UP", "CLOUD_ALERT", "CLOUD_OFF")),
     ("icons18", "lucide.ttf", 18, icons("SPEED")),
     ("icons22", "lucide.ttf", 22, icons("DISTANCE", "TIME")),
+    ("icons20", "lucide.ttf", 20, icons("CLOUD_OK", "CLOUD_UP", "CLOUD_ALERT")),
+    ("icons26", "lucide.ttf", 26, icons("FLAG", "CHECK", "PAUSE")),
     ("icons40", "lucide.ttf", 40, icons("PAUSE")),
 ]
 

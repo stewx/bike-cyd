@@ -170,6 +170,24 @@ static void moveCsv(const String& name, const char* toDir) {
   SD.rename(String(FINISHED_DIR) + "/" + name, to);
 }
 
+static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+static Result last = {};
+
+static void setResult(const String& csvName, const String& tcxName, Outcome outcome) {
+  portENTER_CRITICAL(&lock);
+  strlcpy(last.csv, csvName.c_str(), sizeof last.csv);
+  strlcpy(last.tcx, tcxName.c_str(), sizeof last.tcx);
+  last.outcome = outcome;
+  portEXIT_CRITICAL(&lock);
+}
+
+Result lastResult() {
+  portENTER_CRITICAL(&lock);
+  Result copy = last;
+  portEXIT_CRITICAL(&lock);
+  return copy;
+}
+
 // Returns true if a TCX was written
 static bool exportOne(const String& csvName) {
   const String csvPath = String(FINISHED_DIR) + "/" + csvName;
@@ -181,18 +199,21 @@ static bool exportOne(const String& csvName) {
     in.close();
     logger::printf("tcx: %s has no samples\n", csvName.c_str());
     moveCsv(csvName, DISCARDED_DIR);
+    setResult(csvName, "", Outcome::TooShort);
     return false;
   }
   if (sum.movingS < MIN_MOVING_S || sum.distanceM < MIN_DISTANCE_M) {
     in.close();
     logger::printf("tcx: %s too short (%.0f s, %lu m), discarded\n", csvName.c_str(), sum.movingS, sum.distanceM);
     moveCsv(csvName, DISCARDED_DIR);
+    setResult(csvName, "", Outcome::TooShort);
     return false;
   }
   if (!sum.startEpoch) {
     in.close();
     logger::printf("tcx: %s has no start time\n", csvName.c_str());
     moveCsv(csvName, FAILED_DIR);
+    setResult(csvName, "", Outcome::Failed);
     return false;
   }
 
@@ -215,6 +236,7 @@ static bool exportOne(const String& csvName) {
     return false;
   }
   moveCsv(csvName, CSV_DIR);
+  setResult(csvName, name, Outcome::Exported);
   logger::printf("tcx: %s -> %s (%.0f s, %lu m, %d points)\n", csvName.c_str(), name.c_str(), sum.movingS,
                 sum.distanceM, sum.rows);
   return true;

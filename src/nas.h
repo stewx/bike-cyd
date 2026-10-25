@@ -25,6 +25,10 @@ struct Status {
 
 void start();
 Status status();
+// Name of the last file uploaded ("" if none since boot)
+void lastUploaded(char* out, size_t len);
+// Wakes the uploader now (a ride just ended) instead of at its next check
+void kick();
 const char* stateText(State state);
 
 // Serial commands ("nas ..."): "url <\\server\share[\folder]>", "user <name>",

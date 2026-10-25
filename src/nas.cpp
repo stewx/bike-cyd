@@ -184,11 +184,27 @@ static Result upload(const Settings& cfg, const String& name) {
   return result;
 }
 
-// Sleeps in short steps so the task watchdog keeps getting fed
+static volatile bool kicked = false;
+static char uploadedName[48] = "";
+
+void kick() { kicked = true; }
+
+void lastUploaded(char* out, size_t len) {
+  portENTER_CRITICAL(&lock);
+  strlcpy(out, uploadedName, len);
+  portEXIT_CRITICAL(&lock);
+}
+
+// Sleeps in short steps so the task watchdog keeps getting fed; a kick()
+// ends the wait early
 static void waitMs(uint32_t ms) {
   for (uint32_t start = millis(); millis() - start < ms;) {
     esp_task_wdt_reset();
-    delay(min(ms - (millis() - start), (uint32_t)1000));
+    if (kicked) {
+      kicked = false;
+      return;
+    }
+    delay(min(ms - (millis() - start), (uint32_t)250));
   }
 }
 
@@ -235,6 +251,7 @@ static void run(void*) {
         retryDelayMs = RETRY_MIN_MS;
         portENTER_CRITICAL(&lock);
         current.lastError[0] = '\0';
+        strlcpy(uploadedName, oldest.c_str(), sizeof uploadedName);
         portEXIT_CRITICAL(&lock);
         break;
       case Result::Failed:
