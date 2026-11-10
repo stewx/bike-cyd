@@ -29,6 +29,14 @@ Status status();
 void lastUploaded(char* out, size_t len);
 // Wakes the uploader now (a ride just ended) instead of at its next check
 void kick();
+// The stored share settings; the password itself is never handed out
+void stored(String& url, String& user, bool& havePass);
+// Whether a share name looks like \\server\share (or with a folder)
+bool validShare(const String& url);
+// Saves new share settings; a null pass keeps the stored password
+void store(const String& url, const String& user, const String* pass);
+// Queues a small test file and wakes the uploader; false if it couldn't be written
+bool queueTest(String& name);
 const char* stateText(State state);
 
 // Serial commands ("nas ..."): "url <\\server\share[\folder]>", "user <name>",

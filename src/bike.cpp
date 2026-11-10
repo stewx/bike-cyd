@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "logger.h"
+#include "settings.h"
 #include "storage.h"
 
 // iFit / ProForm protocol client for the HealthRider H25X ("I_EB").
@@ -17,7 +18,6 @@
 
 namespace bike {
 
-static constexpr const char* BIKE_NAME = "I_EB";
 static const NimBLEUUID IFIT_SERVICE("00001533-1412-efde-1523-785feabcd123");
 static const NimBLEUUID IFIT_WRITE("00001534-1412-efde-1523-785feabcd123");
 static const NimBLEUUID IFIT_NOTIFY("00001535-1412-efde-1523-785feabcd123");
@@ -25,8 +25,8 @@ static const NimBLEUUID IFIT_NOTIFY("00001535-1412-efde-1523-785feabcd123");
 static constexpr uint32_t SCAN_MS = 5000;
 static constexpr uint32_t INIT_GAP_MS = 400;
 static constexpr uint32_t POLL_MS = 200;
-// Polling keeps the console awake, so let go after this long without riding
-static constexpr uint32_t IDLE_RELEASE_MS = 3 * 60 * 1000;
+// Polling keeps the console awake, so it lets go after settings releaseMin
+// without riding.
 // After letting go: the console counts as asleep once it stops advertising
 // for this long. It normally sleeps about 5 minutes after the disconnect, so
 // if it is still awake after REST_MAX_MS someone is probably using it.
@@ -169,9 +169,10 @@ static const NimBLEAdvertisedDevice* scan() {
   scanner->setInterval(100);
   scanner->setWindow(99);
   NimBLEScanResults results = scanner->getResults(SCAN_MS, false);
+  const std::string bikeName = settings::get().bikeName;
   for (int i = 0; i < results.getCount(); i++) {
     const NimBLEAdvertisedDevice* d = results.getDevice(i);
-    if (d->getName() == BIKE_NAME) return d;
+    if (d->getName() == bikeName) return d;
   }
   return nullptr;
 }
@@ -236,8 +237,9 @@ static bool session(NimBLEClient* client) {
     }
     if (get().workout == Workout::Running) {
       lastRiding = millis();
-    } else if (millis() - lastRiding > IDLE_RELEASE_MS) {
-      logger::printf("bike: idle for 3 minutes, disconnecting so the console can sleep\n");
+    } else if (millis() - lastRiding > settings::get().releaseMin * 60000UL) {
+      logger::printf("bike: idle for %u minutes, disconnecting so the console can sleep\n",
+                     settings::get().releaseMin);
       return true;
     }
     delay(POLL_MS);

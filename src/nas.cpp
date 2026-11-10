@@ -297,6 +297,54 @@ static void setSetting(Print& out, const char* key, String value) {
   out.printf("nas: %s set%s%s\n", key, strcmp(key, "pass") ? " to " : "", strcmp(key, "pass") ? value.c_str() : "");
 }
 
+void stored(String& url, String& user, bool& havePass) {
+  Preferences prefs;
+  url = user = "";
+  havePass = false;
+  if (!prefs.begin("nas", true)) return;
+  url = prefs.getString("url", "");
+  user = prefs.getString("user", "");
+  havePass = !prefs.getString("pass", "").isEmpty();
+  prefs.end();
+}
+
+bool validShare(const String& url) {
+  String check = url;
+  check.trim();
+  check.replace('\\', '/');
+  while (check.startsWith("/")) check.remove(0, 1);
+  int slash = check.indexOf('/');
+  return slash > 0 && slash < (int)check.length() - 1;
+}
+
+void store(const String& url, const String& user, const String* pass) {
+  Preferences prefs;
+  if (!prefs.begin("nas", false)) return;
+  prefs.putString("url", url);
+  prefs.putString("user", user);
+  if (pass) prefs.putString("pass", *pass);
+  prefs.end();
+  logger::printf("nas: settings changed to %s (user %s)\n", url.c_str(), user.c_str());
+  retryDelayMs = RETRY_MIN_MS;
+  kick();
+}
+
+bool queueTest(String& name) {
+  // A small file to check the upload path end to end
+  char path[64];
+  time_t now = time(nullptr);
+  struct tm t;
+  gmtime_r(&now, &t);
+  strftime(path, sizeof path, "/rides/pending/test-%Y%m%d-%H%M%S.txt", &t);
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) return false;
+  f.printf("bike-cyd upload test %s\n", path);
+  f.close();
+  name = path + strlen(PENDING_DIR) + 1;
+  kick();
+  return true;
+}
+
 void command(Print& out, const String& args) {
   if (args.startsWith("url ")) {
     setSetting(out, "url", args.substring(4));
@@ -305,20 +353,9 @@ void command(Print& out, const String& args) {
   } else if (args.startsWith("pass ")) {
     setSetting(out, "pass", args.substring(5));
   } else if (args == "test") {
-    // A small file to check the upload path end to end
-    char name[64];
-    time_t now = time(nullptr);
-    struct tm t;
-    gmtime_r(&now, &t);
-    strftime(name, sizeof name, "/rides/pending/test-%Y%m%d-%H%M%S.txt", &t);
-    File f = SD.open(name, FILE_WRITE);
-    if (f) {
-      f.printf("bike-cyd upload test %s\n", name);
-      f.close();
-      out.printf("nas: queued %s\n", name);
-    } else {
-      out.println("nas: could not write test file");
-    }
+    String name;
+    if (queueTest(name)) out.printf("nas: queued %s\n", name.c_str());
+    else out.println("nas: could not write test file");
   } else {
     Settings cfg = loadSettings();
     Status s = status();

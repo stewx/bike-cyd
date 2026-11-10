@@ -5,6 +5,7 @@
 
 #include "logger.h"
 #include "net.h"
+#include "settings.h"
 #include "storage.h"
 
 namespace ride {
@@ -14,8 +15,6 @@ static constexpr const char* FINISHED_DIR = "/rides/finished";
 
 // Data older than this means the bike has gone quiet
 static constexpr uint32_t STALE_MS = 10000;
-// A ride ends after this long without riding (paused or disconnected)
-static constexpr uint32_t END_AFTER_MS = 5 * 60 * 1000;
 static constexpr uint32_t FLUSH_MS = 10000;
 
 static Stats current = {};
@@ -146,7 +145,8 @@ void tick(const bike::Data& d) {
     }
   } else {
     current.paused = true;
-    if (consoleEnded || now - lastRunningMs > END_AFTER_MS) {
+    // A ride ends after settings rideEndMin without riding (paused or disconnected)
+    if (consoleEnded || now - lastRunningMs > settings::get().rideEndMin * 60000UL) {
       endRide();
       return;
     }

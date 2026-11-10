@@ -13,5 +13,7 @@ void fileOnly(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 // Writes buffered lines to the SD card; call from the main loop. Writes at
 // most every 5 s unless forced (before a restart).
 void flush(bool force = false);
+// Why the board last started: "power on", "restart", "crash", ...
+const char* resetReason();
 
 }  // namespace logger

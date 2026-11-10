@@ -94,4 +94,18 @@ void flush(bool force) {
   }
 }
 
+const char* resetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power on";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    default: return "other";
+  }
+}
+
 }  // namespace logger

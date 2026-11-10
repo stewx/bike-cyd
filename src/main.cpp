@@ -2,16 +2,19 @@
 #include <ArduinoOTA.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_core_dump.h>
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
 #include <esp_task_wdt.h>
 
 #include "bike.h"
 #include "board.h"
+#include "history.h"
 #include "logger.h"
 #include "nas.h"
 #include "net.h"
 #include "ride.h"
+#include "settings.h"
 #include "storage.h"
 #include "touch.h"
 #include "ui.h"
@@ -34,20 +37,6 @@ static bool otaStarted = false;
 // Tells the Arduino core not to accept a new OTA image at boot; it is
 // accepted in checkHealthy() once the firmware has proven itself.
 extern "C" bool verifyRollbackLater() { return true; }
-
-static const char* resetReason() {
-  switch (esp_reset_reason()) {
-    case ESP_RST_POWERON: return "power on";
-    case ESP_RST_SW: return "restart";
-    case ESP_RST_PANIC: return "crash";
-    case ESP_RST_INT_WDT: return "interrupt watchdog";
-    case ESP_RST_TASK_WDT: return "task watchdog";
-    case ESP_RST_WDT: return "watchdog";
-    case ESP_RST_BROWNOUT: return "brownout";
-    case ESP_RST_DEEPSLEEP: return "deep sleep";
-    default: return "other";
-  }
-}
 
 static unsigned stackLeft(const char* task) {
   TaskHandle_t h = xTaskGetHandle(task);
@@ -151,6 +140,25 @@ static void setOtaPassword(const String& pass) {
   Serial.println("ota: password set, restart to apply");
 }
 
+// The last crash saved in flash; decode the addresses with the matching
+// firmware.elf (xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf ...)
+static void printCrash() {
+  Serial.printf("crash: last reset %s\n", logger::resetReason());
+  auto* s = (esp_core_dump_summary_t*)malloc(sizeof(esp_core_dump_summary_t));
+  if (s && esp_core_dump_get_summary(s) == ESP_OK) {
+    Serial.printf("crash: task %s, build %.8s, pc 0x%08lx, cause %lu, address 0x%08lx\ncrash: backtrace",
+                  s->exc_task, (const char*)s->app_elf_sha256, (unsigned long)s->exc_pc,
+                  (unsigned long)s->ex_info.exc_cause, (unsigned long)s->ex_info.exc_vaddr);
+    for (uint32_t i = 0; i < s->exc_bt_info.depth && i < 16; i++) {
+      Serial.printf(" 0x%08lx", (unsigned long)s->exc_bt_info.bt[i]);
+    }
+    Serial.printf("%s\n", s->exc_bt_info.corrupted ? " (corrupted)" : "");
+  } else {
+    Serial.println("crash: none saved");
+  }
+  free(s);
+}
+
 static void handleCommand(String cmd) {
   cmd.trim();
   if (cmd.startsWith("ls ")) storage::listDir(Serial, cmd.substring(3).c_str());
@@ -163,23 +171,13 @@ static void handleCommand(String cmd) {
     if (sp > 0) storage::move(Serial, cmd.substring(3, sp).c_str(), cmd.substring(sp + 1).c_str());
   } else if (cmd.startsWith("ota pass ")) {
     setOtaPassword(cmd.substring(9));
-  } else if (cmd == "touchcal") {
-    ui::calibrateTouch();
-  } else if (cmd == "touch") {
-    // Prints where each press lands, for 20 s, to check the calibration
-    bool was = false;
-    for (uint32_t start = millis(); millis() - start < 20000;) {
-      esp_task_wdt_reset();
-      int x, y;
-      bool now = touch::touched();
-      if (now && !was) {
-        delay(20);
-        if (touch::read(x, y)) Serial.printf("touch: %d,%d\n", x, y);
-        else Serial.println("touch: pressed (not calibrated)");
-      }
-      was = now;
-      delay(10);
-    }
+  } else if (cmd.startsWith("tap ") || cmd.startsWith("rawtap ")) {
+    // Testing: a tap at a screen position, or with raw touch readings
+    bool raw = cmd.startsWith("raw");
+    int sp = cmd.indexOf(' ', raw ? 7 : 4);
+    if (sp > 0) ui::tap(cmd.substring(raw ? 7 : 4, sp).toInt(), cmd.substring(sp + 1).toInt(), raw);
+  } else if (cmd == "crash") {
+    printCrash();
   } else if (cmd == "ldr") {
     // Calibration: 20 light sensor readings, half a second apart
     for (int i = 0; i < 20; i++) {
@@ -202,7 +200,7 @@ static void handleCommand(String cmd) {
 
 // 'S' dumps the screen (tools/screenshot.py); ":<command>\n" runs a command:
 // ls/get/rm/mv (SD card, tools/sdfile.py), nas ..., sim <seconds>,
-// ota pass <password>, touchcal, touch, ldr, hang, reboot
+// ota pass <password>, tap <x> <y>, rawtap <x> <y>, crash, ldr, hang, reboot
 static void readSerial() {
   static String cmd;
   static bool inCmd = false;
@@ -242,13 +240,15 @@ void setup() {
   esp_task_wdt_reconfigure(&wdt);
   esp_task_wdt_add(nullptr);  // this (main loop) task
 
+  settings::begin();
   net::setTimeZone();
+  history::begin();
   Serial.println();
   // The ELF hash tells builds apart even when FW_VERSION hasn't changed
   char build[9];
   esp_app_get_elf_sha256(build, sizeof build);
   logger::printf("bike-cyd %s (build %s, %s) starting (reset: %s)\n", FW_VERSION, build,
-                 esp_ota_get_running_partition()->label, resetReason());
+                 esp_ota_get_running_partition()->label, logger::resetReason());
 
   ui::begin();
   storage::begin();
@@ -272,20 +272,10 @@ void loop() {
   if (otaStarted) ArduinoOTA.handle();
   checkHealthy();
 
-  static bool wasTouched = false;
   static uint32_t lastTouchCheck = 0;
   if (millis() - lastTouchCheck >= 30) {
     lastTouchCheck = millis();
-    bool touched = touch::touched();
-    if (touched && !wasTouched) {
-      int x = 0, y = 0;
-      delay(20);  // let the press settle before reading where it is
-      bool havePosition = touch::read(x, y);
-      ui::press(havePosition, x, y);
-    } else if (touched) {
-      ui::wake();
-    }
-    wasTouched = touched;
+    ui::pollTouch();
   }
 
   uint32_t now = millis();

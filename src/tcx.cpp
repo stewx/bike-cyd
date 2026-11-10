@@ -6,7 +6,9 @@
 
 #include <vector>
 
+#include "history.h"
 #include "logger.h"
+#include "settings.h"
 
 namespace tcx {
 
@@ -17,9 +19,6 @@ static constexpr const char* CSV_DIR = "/rides/csv";
 static constexpr const char* DISCARDED_DIR = "/rides/discarded";
 static constexpr const char* FAILED_DIR = "/rides/failed";
 
-// Rides shorter than this are not worth uploading
-static constexpr float MIN_MOVING_S = 120;
-static constexpr unsigned long MIN_DISTANCE_M = 500;
 // Gaps between samples longer than this are pauses, not riding
 static constexpr float MAX_GAP_S = 10;
 
@@ -202,7 +201,9 @@ static bool exportOne(const String& csvName) {
     setResult(csvName, "", Outcome::TooShort);
     return false;
   }
-  if (sum.movingS < MIN_MOVING_S || sum.distanceM < MIN_DISTANCE_M) {
+  // Rides shorter than this are not worth uploading
+  const settings::Values cfg = settings::get();
+  if (sum.movingS < cfg.minRideSec || sum.distanceM < cfg.minRideM) {
     in.close();
     logger::printf("tcx: %s too short (%.0f s, %lu m), discarded\n", csvName.c_str(), sum.movingS, sum.distanceM);
     moveCsv(csvName, DISCARDED_DIR);
@@ -237,6 +238,7 @@ static bool exportOne(const String& csvName) {
   }
   moveCsv(csvName, CSV_DIR);
   setResult(csvName, name, Outcome::Exported);
+  history::add({(uint32_t)sum.startEpoch, (uint32_t)sum.distanceM, (uint32_t)lroundf(sum.movingS)});
   logger::printf("tcx: %s -> %s (%.0f s, %lu m, %d points)\n", csvName.c_str(), name.c_str(), sum.movingS,
                 sum.distanceM, sum.rows);
   return true;

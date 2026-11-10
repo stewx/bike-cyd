@@ -18,11 +18,6 @@ static constexpr uint8_t CMD_READ_Z1 = 0xB0;
 static constexpr uint16_t PRESSURE_THRESHOLD = 400;
 static constexpr int SAMPLES = 7;
 
-// screen = raw * scale + offset, with screen X taken from raw Y if swapped
-struct Calibration {
-  bool swapped;
-  float xScale, xOffset, yScale, yOffset;
-};
 static Calibration cal = {};
 static bool haveCal = false;
 
@@ -93,24 +88,27 @@ bool readRaw(uint16_t& rawX, uint16_t& rawY) {
   return touched();  // a reading taken while the finger lifts is unreliable
 }
 
+void apply(const Calibration& c, uint16_t rawX, uint16_t rawY, int& x, int& y) {
+  float a = c.swapped ? rawY : rawX;
+  float b = c.swapped ? rawX : rawY;
+  x = constrain((int)lroundf(a * c.xScale + c.xOffset), 0, 319);
+  y = constrain((int)lroundf(b * c.yScale + c.yOffset), 0, 239);
+}
+
 bool read(int& x, int& y) {
   uint16_t rx, ry;
   if (!haveCal || !readRaw(rx, ry)) return false;
-  float a = cal.swapped ? ry : rx;
-  float b = cal.swapped ? rx : ry;
-  x = constrain((int)(a * cal.xScale + cal.xOffset), 0, 319);
-  y = constrain((int)(b * cal.yScale + cal.yOffset), 0, 239);
+  apply(cal, rx, ry, x, y);
   return true;
 }
 
 bool calibrated() { return haveCal; }
 
-bool calibrate(const uint16_t raw[3][2], const int screen[3][2]) {
+bool solve(const uint16_t raw[3][2], const int screen[3][2], Calibration& c) {
   // Point 0 -> 1 moves right along the screen, 1 -> 2 moves down. The raw
   // axis that changes most on the first move is the screen's X axis.
   int dX = abs(raw[1][0] - raw[0][0]);
   int dY = abs(raw[1][1] - raw[0][1]);
-  Calibration c;
   c.swapped = dY > dX;
   float a0 = raw[0][c.swapped ? 1 : 0], a1 = raw[1][c.swapped ? 1 : 0];
   float b1 = raw[1][c.swapped ? 0 : 1], b2 = raw[2][c.swapped ? 0 : 1];
@@ -119,7 +117,10 @@ bool calibrate(const uint16_t raw[3][2], const int screen[3][2]) {
   c.xOffset = screen[0][0] - a0 * c.xScale;
   c.yScale = (screen[2][1] - screen[1][1]) / (b2 - b1);
   c.yOffset = screen[1][1] - b1 * c.yScale;
+  return true;
+}
 
+void save(const Calibration& c) {
   Preferences prefs;
   if (prefs.begin("touch", false)) {
     prefs.putBool("swap", c.swapped);
@@ -131,7 +132,6 @@ bool calibrate(const uint16_t raw[3][2], const int screen[3][2]) {
   }
   cal = c;
   haveCal = true;
-  return true;
 }
 
 }  // namespace touch
